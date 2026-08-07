@@ -4,12 +4,55 @@ import "./App.css";
 const STAGES = ["github", "logs", "reasoning"];
 
 function App() {
-  const [repoName, setRepoName] = useState("facebook/react");
+  const [username, setUsername] = useState("");
+  const [repos, setRepos] = useState([]);
+  const [repoName, setRepoName] = useState("");
+  const [repoLoading, setRepoLoading] = useState(false);
+  const [repoError, setRepoError] = useState("");
   const [logText, setLogText] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeStage, setActiveStage] = useState(-1);
+
+  const handleFetchRepos = async () => {
+    const trimmed = username.trim();
+    if (!trimmed) return;
+
+    setRepoLoading(true);
+    setRepoError("");
+    setRepos([]);
+    setRepoName("");
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/github/repos?username=${encodeURIComponent(trimmed)}`
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || `Server error: ${response.status}`);
+      }
+
+      setRepos(data);
+      if (data.length > 0) {
+        setRepoName(data[0].full_name);
+      } else {
+        setRepoError("No public repositories found for this user");
+      }
+    } catch (err) {
+      setRepoError(err.message);
+    } finally {
+      setRepoLoading(false);
+    }
+  };
+
+  const handleUsernameKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleFetchRepos();
+    }
+  };
 
   const handleAnalyze = async () => {
     setLoading(true);
@@ -47,9 +90,19 @@ function App() {
   return (
     <div className="app">
       <div className="app__glow" />
+      <div className="particles" aria-hidden="true">
+        {Array.from({ length: 16 }).map((_, i) => (
+          <span key={i} className="particle" />
+        ))}
+      </div>
+
 
       <header className="header">
-        <div className="header__mark">◆</div>
+        <div className="header__mark">
+          <span className="header__mark-ring" />
+          <span className="header__mark-core" />
+          <span className="header__mark-satellite" />
+        </div>
         <div>
           <h1 className="header__title">Engineering Copilot</h1>
           <p className="header__subtitle">
@@ -58,30 +111,64 @@ function App() {
         </div>
       </header>
 
-      <main className="panel">
+      <div className="panel-wrap">
+        <div className="panel-field" />
+        <main className="panel">
         <div className="field">
           <label className="field__label">
-            <span className="field__index">01</span> Repository
+            <span className="field__index">01</span> GitHub username
           </label>
-          <input
-            className="field__input field__input--mono"
-            type="text"
-            value={repoName}
-            onChange={(e) => setRepoName(e.target.value)}
-            placeholder="owner/repo"
-            spellCheck={false}
-          />
+          <div className="field__row">
+            <input
+              className="field__input field__input--mono"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              onKeyDown={handleUsernameKeyDown}
+              placeholder="e.g. octocat"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="fetch-button"
+              onClick={handleFetchRepos}
+              disabled={repoLoading || !username.trim()}
+            >
+              {repoLoading ? "Loading..." : "Fetch repos"}
+            </button>
+          </div>
+          {repoError && <div className="field__error">{repoError}</div>}
         </div>
+
+        {repos.length > 0 && (
+          <div className="field">
+            <label className="field__label">
+              <span className="field__index">02</span> Repository
+            </label>
+            <select
+              className="field__input field__input--mono"
+              value={repoName}
+              onChange={(e) => setRepoName(e.target.value)}
+            >
+              {repos.map((r) => (
+                <option key={r.full_name} value={r.full_name}>
+                  {r.full_name}
+                  {r.private ? " (private)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="field">
           <label className="field__label">
-            <span className="field__index">02</span> Deployment log
+            <span className="field__index">03</span> Deployment log
           </label>
           <textarea
             className="field__input field__input--mono field__input--area"
             value={logText}
             onChange={(e) => setLogText(e.target.value)}
-            rows={9}
+            rows={4}
             placeholder="Paste stack traces, error lines, or a full deploy log..."
             spellCheck={false}
           />
@@ -139,6 +226,7 @@ function App() {
           </div>
         )}
       </main>
+      </div>
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import os
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -55,6 +57,56 @@ def analyze(request: AnalyzeRequest):
         "errors_found": result["logs_data"]["error_count"],
         "root_cause": result["root_cause"],
     }
+
+
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+
+
+@app.get("/github/repos")
+async def list_user_repos(username: str):
+    username = username.strip()
+
+    if not USERNAME_PATTERN.match(username):
+        raise HTTPException(status_code=400, detail="Enter a valid GitHub username")
+
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    repos = []
+    async with httpx.AsyncClient() as client:
+        page = 1
+        while True:
+            response = await client.get(
+                f"https://api.github.com/users/{username}/repos",
+                headers=headers,
+                params={"sort": "updated", "per_page": 100, "page": page},
+            )
+
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"GitHub user '{username}' not found")
+            if response.status_code == 403:
+                raise HTTPException(status_code=429, detail="GitHub API rate limit hit — try again shortly")
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail="Failed to fetch repositories")
+
+            batch = response.json()
+            repos.extend(batch)
+
+            if len(batch) < 100:
+                break
+            page += 1
+
+    return [
+        {
+            "full_name": r["full_name"],
+            "private": r["private"],
+            "updated_at": r["updated_at"],
+            "description": r.get("description"),
+        }
+        for r in repos
+    ]
 
 
 @app.get("/")
