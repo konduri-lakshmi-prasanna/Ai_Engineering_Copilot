@@ -1,16 +1,25 @@
 import { useState } from "react";
+import "./App.css";
+
+const STAGES = ["github", "logs", "reasoning"];
 
 function App() {
-  const [repoName, setRepoName] = useState("konduri-lakshmi-prasanna/Ai_Engineering_Copilot");
+  const [repoName, setRepoName] = useState("facebook/react");
   const [logText, setLogText] = useState("");
-  const [result, setResult] = useState("");
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [activeStage, setActiveStage] = useState(-1);
 
   const handleAnalyze = async () => {
     setLoading(true);
     setError("");
-    setResult("");
+    setResult(null);
+    setActiveStage(0);
+
+    const stageTimer = setInterval(() => {
+      setActiveStage((prev) => (prev < STAGES.length - 1 ? prev + 1 : prev));
+    }, 700);
 
     try {
       const response = await fetch("http://127.0.0.1:8000/analyze", {
@@ -19,73 +28,117 @@ function App() {
         body: JSON.stringify({ repo_name: repoName, log_text: logText }),
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`);
+        throw new Error(data.detail || `Server error: ${response.status}`);
       }
 
-      const data = await response.json();
-      setResult(data.root_cause);
+      setResult(data);
     } catch (err) {
       setError(err.message);
     } finally {
+      clearInterval(stageTimer);
+      setActiveStage(STAGES.length);
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: 700, margin: "40px auto", fontFamily: "sans-serif", padding: "0 20px" }}>
-      <h1>AI Engineering Copilot</h1>
-      <p>Paste a deployment log and let the copilot find the root cause.</p>
+    <div className="app">
+      <div className="app__glow" />
 
-      <label style={{ display: "block", marginTop: 20, fontWeight: "bold" }}>
-        GitHub Repo (owner/repo)
-      </label>
-      <input
-        type="text"
-        value={repoName}
-        onChange={(e) => setRepoName(e.target.value)}
-        style={{ width: "100%", padding: 8, marginTop: 4 }}
-      />
-
-      <label style={{ display: "block", marginTop: 20, fontWeight: "bold" }}>
-        Deployment Log
-      </label>
-      <textarea
-        value={logText}
-        onChange={(e) => setLogText(e.target.value)}
-        rows={8}
-        placeholder="Paste your error log here..."
-        style={{ width: "100%", padding: 8, marginTop: 4, fontFamily: "monospace" }}
-      />
-
-      <button
-        onClick={handleAnalyze}
-        disabled={loading || !logText}
-        style={{
-          marginTop: 20,
-          padding: "10px 20px",
-          background: "#2563eb",
-          color: "white",
-          border: "none",
-          borderRadius: 6,
-          cursor: loading ? "not-allowed" : "pointer",
-        }}
-      >
-        {loading ? "Analyzing..." : "Analyze Root Cause"}
-      </button>
-
-      {error && (
-        <div style={{ marginTop: 20, padding: 12, background: "#fee2e2", color: "#991b1b", borderRadius: 6 }}>
-          Error: {error}
+      <header className="header">
+        <div className="header__mark">◆</div>
+        <div>
+          <h1 className="header__title">Engineering Copilot</h1>
+          <p className="header__subtitle">
+            Point it at any public repo. It reads the commits, reads the log, tells you what broke.
+          </p>
         </div>
-      )}
+      </header>
 
-      {result && (
-        <div style={{ marginTop: 20, padding: 16, background: "#f3f4f6", borderRadius: 6, whiteSpace: "pre-wrap" }}>
-          <strong>Root Cause Analysis:</strong>
-          <p>{result}</p>
+      <main className="panel">
+        <div className="field">
+          <label className="field__label">
+            <span className="field__index">01</span> Repository
+          </label>
+          <input
+            className="field__input field__input--mono"
+            type="text"
+            value={repoName}
+            onChange={(e) => setRepoName(e.target.value)}
+            placeholder="owner/repo"
+            spellCheck={false}
+          />
         </div>
-      )}
+
+        <div className="field">
+          <label className="field__label">
+            <span className="field__index">02</span> Deployment log
+          </label>
+          <textarea
+            className="field__input field__input--mono field__input--area"
+            value={logText}
+            onChange={(e) => setLogText(e.target.value)}
+            rows={9}
+            placeholder="Paste stack traces, error lines, or a full deploy log..."
+            spellCheck={false}
+          />
+        </div>
+
+        <button
+          className="run-button"
+          onClick={handleAnalyze}
+          disabled={loading || !logText || !repoName}
+        >
+          {loading ? "Analyzing" : "Run analysis"}
+          <span className="run-button__arrow">→</span>
+        </button>
+
+        {activeStage >= 0 && (
+          <div className="trace">
+            {STAGES.map((stage, i) => (
+              <div key={stage} className="trace__item">
+                <div
+                  className={
+                    "trace__dot" +
+                    (i < activeStage ? " trace__dot--done" : "") +
+                    (i === activeStage && loading ? " trace__dot--active" : "")
+                  }
+                />
+                <span className="trace__label">
+                  {stage === "github" && "Reading commits"}
+                  {stage === "logs" && "Parsing log"}
+                  {stage === "reasoning" && "Reasoning"}
+                </span>
+                {i < STAGES.length - 1 && <div className="trace__line" />}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="result result--error">
+            <div className="result__label">Analysis failed</div>
+            <div className="result__body">{error}</div>
+          </div>
+        )}
+
+        {result && (
+          <div className="result">
+            <div className="result__meta">
+              <span>{result.repo}</span>
+              <span className="result__dot">·</span>
+              <span>{result.commits_analyzed.length} commits checked</span>
+              <span className="result__dot">·</span>
+              <span>{result.errors_found} errors found</span>
+            </div>
+            <div className="result__label result__label--success">Root cause</div>
+            <div className="result__body">{result.root_cause}</div>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

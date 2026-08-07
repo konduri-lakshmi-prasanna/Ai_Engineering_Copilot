@@ -4,3 +4,4 @@ langgraph
 groq
 PyGithub
 python-dotenv
+httpx

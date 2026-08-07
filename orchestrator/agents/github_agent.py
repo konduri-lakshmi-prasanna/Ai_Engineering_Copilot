@@ -4,25 +4,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def github_agent(repo_name: str, limit: int = 5) -> dict:
-    """
-    Fetches recent commits and changed files from a GitHub repo.
-    repo_name format: "owner/repo"
-    """
+def github_agent(repo_name: str, limit: int = 3) -> dict:
     token = os.getenv("GITHUB_TOKEN")
     gh = Github(token)
     repo = gh.get_repo(repo_name)
     commits = repo.get_commits()[:limit]
 
     result = {"repo": repo_name, "commits": []}
-
     for c in commits:
         result["commits"].append({
             "sha": c.sha[:7],
             "message": c.commit.message,
             "author": c.commit.author.name,
             "date": str(c.commit.author.date),
-            "files_changed": [f.filename for f in c.files],
+            "files_changed": [f.filename for f in c.files][:10],
         })
-
     return result
