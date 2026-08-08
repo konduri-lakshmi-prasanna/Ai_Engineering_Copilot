@@ -62,15 +62,54 @@ def analyze(request: AnalyzeRequest):
 
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+async def _resolve_to_username(identifier: str, client: httpx.AsyncClient, headers: dict) -> str:
+    """
+    Accepts either a GitHub username or an email address and returns a
+    GitHub username. GitHub has no direct "look up by email" endpoint
+    (emails are private by default), so for an email we fall back to
+    GitHub's user-search API, which only finds a match if that person has
+    made their email public on their profile.
+    """
+    identifier = identifier.strip()
+
+    if "@" in identifier:
+        if not EMAIL_PATTERN.match(identifier):
+            raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+        search_response = await client.get(
+            "https://api.github.com/search/users",
+            headers=headers,
+            params={"q": f"{identifier} in:email"},
+        )
+
+        if search_response.status_code == 403:
+            raise HTTPException(status_code=429, detail="GitHub API rate limit hit — try again shortly")
+        if search_response.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to search GitHub for that email")
+
+        items = search_response.json().get("items", [])
+        if not items:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No public GitHub profile found for '{identifier}'. "
+                    "Most people keep their email private on GitHub — try their username instead."
+                ),
+            )
+
+        return items[0]["login"]
+
+    if not USERNAME_PATTERN.match(identifier):
+        raise HTTPException(status_code=400, detail="Enter a valid GitHub username or email")
+
+    return identifier
 
 
 @app.get("/github/repos")
 async def list_user_repos(username: str):
-    username = username.strip()
-
-    if not USERNAME_PATTERN.match(username):
-        raise HTTPException(status_code=400, detail="Enter a valid GitHub username")
-
     headers = {"Accept": "application/vnd.github+json"}
     token = os.getenv("GITHUB_TOKEN")
     if token:
@@ -78,16 +117,18 @@ async def list_user_repos(username: str):
 
     repos = []
     async with httpx.AsyncClient() as client:
+        resolved_username = await _resolve_to_username(username, client, headers)
+
         page = 1
         while True:
             response = await client.get(
-                f"https://api.github.com/users/{username}/repos",
+                f"https://api.github.com/users/{resolved_username}/repos",
                 headers=headers,
                 params={"sort": "updated", "per_page": 100, "page": page},
             )
 
             if response.status_code == 404:
-                raise HTTPException(status_code=404, detail=f"GitHub user '{username}' not found")
+                raise HTTPException(status_code=404, detail=f"GitHub user '{resolved_username}' not found")
             if response.status_code == 403:
                 raise HTTPException(status_code=429, detail="GitHub API rate limit hit — try again shortly")
             if response.status_code != 200:
@@ -100,15 +141,18 @@ async def list_user_repos(username: str):
                 break
             page += 1
 
-    return [
-        {
-            "full_name": r["full_name"],
-            "private": r["private"],
-            "updated_at": r["updated_at"],
-            "description": r.get("description"),
-        }
-        for r in repos
-    ]
+    return {
+        "username": resolved_username,
+        "repos": [
+            {
+                "full_name": r["full_name"],
+                "private": r["private"],
+                "updated_at": r["updated_at"],
+                "description": r.get("description"),
+            }
+            for r in repos
+        ],
+    }
 
 
 @app.get("/")
