@@ -53,9 +53,11 @@ def analyze(request: AnalyzeRequest):
 
     return {
         "repo": repo_name,
-        "commits_analyzed": [c["sha"] for c in result["github_data"]["commits"]],
+        "commits_scanned": len(result["github_data"]["commits"]),
+        "implicated_commits": result["implicated_commits"],
         "errors_found": result["logs_data"]["error_count"],
         "root_cause": result["root_cause"],
+        "fix_suggestion": result["fix_suggestion"],
     }
 
 
