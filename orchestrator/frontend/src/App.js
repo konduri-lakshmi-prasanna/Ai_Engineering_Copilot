@@ -5,6 +5,7 @@ const STAGES = ["github", "logs", "reasoning"];
 
 function App() {
   const [username, setUsername] = useState("");
+  const [resolvedUsername, setResolvedUsername] = useState("");
   const [repos, setRepos] = useState([]);
   const [repoName, setRepoName] = useState("");
   const [repoLoading, setRepoLoading] = useState(false);
@@ -29,6 +30,7 @@ function App() {
     setRepoError("");
     setRepos([]);
     setRepoName("");
+    setResolvedUsername("");
 
     try {
       const response = await fetch(
@@ -40,13 +42,15 @@ function App() {
         throw new Error(data.detail || `Server error: ${response.status}`);
       }
 
-      setRepos(data);
-      if (data.length > 0) {
-        setRepoName(data[0].full_name);
+      setResolvedUsername(data.username);
+      setRepos(data.repos);
+      if (data.repos.length > 0) {
+        setRepoName(data.repos[0].full_name);
       } else {
         setRepoError("No public repositories found for this user");
       }
     } catch (err) {
+      setResolvedUsername("");
       setRepoError(err.message);
     } finally {
       setRepoLoading(false);
@@ -150,7 +154,7 @@ function App() {
 
         <div className="field">
           <label className="field__label">
-            <span className="field__index">01</span> GitHub username
+            <span className="field__index">01</span> GitHub username or email
           </label>
           <input
             className="field__input field__input--mono"
@@ -158,7 +162,7 @@ function App() {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             onKeyDown={handleUsernameKeyDown}
-            placeholder="e.g. octocat"
+            placeholder="e.g. octocat or you@email.com"
             spellCheck={false}
           />
           <button
@@ -170,6 +174,11 @@ function App() {
             {repoLoading ? "Loading..." : "Fetch repos"}
           </button>
           {repoError && <div className="field__error">{repoError}</div>}
+          {resolvedUsername && !repoError && (
+            <div className="field__resolved">
+              Matched GitHub user: <strong>{resolvedUsername}</strong>
+            </div>
+          )}
         </div>
 
         {repos.length > 0 && (
