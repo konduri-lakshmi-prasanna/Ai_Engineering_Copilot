@@ -1,11 +1,13 @@
 import os
+import re
+import json
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from graph import build_graph
 from auth import router as auth_router
-import re
+from llm_client import ask_groq
 
 app = FastAPI(title="AI Engineering Copilot")
 
@@ -51,14 +53,63 @@ def analyze(request: AnalyzeRequest):
             raise HTTPException(status_code=429, detail="GitHub API rate limit hit — try again shortly")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {error_msg}")
 
+    github_data = result["github_data"]
+    scan_mode = github_data.get("mode", "recent")
+    items_scanned = (
+        len(github_data.get("files", []))
+        if scan_mode == "targeted"
+        else len(github_data.get("commits", []))
+    )
+
     return {
         "repo": repo_name,
-        "commits_scanned": len(result["github_data"]["commits"]),
+        "commits_scanned": items_scanned,
+        "scan_mode": scan_mode,
         "implicated_commits": result["implicated_commits"],
         "errors_found": result["logs_data"]["error_count"],
         "root_cause": result["root_cause"],
         "fix_suggestion": result["fix_suggestion"],
+        "why_it_works": result.get("why_it_works", ""),
+        "beginner_explanation": result.get("beginner_explanation", ""),
+        "interview_questions": result.get("interview_questions", []),
     }
+
+
+class ChatRequest(BaseModel):
+    repo_name: str
+    context: dict
+    question: str
+
+
+@app.post("/chat")
+def chat(request: ChatRequest):
+    """
+    Handles follow-up questions about an analysis that already ran, instead
+    of re-running the full GitHub/logs/reasoning pipeline from scratch.
+    """
+    context_json = json.dumps(request.context, indent=2)
+
+    prompt = f"""
+You already analyzed a deployment issue for the repo {request.repo_name}.
+Here is what you found earlier:
+
+{context_json}
+
+The user now asks a follow-up question:
+"{request.question}"
+
+Answer directly and practically, building on the analysis above — don't
+re-diagnose from scratch or invent a new root cause. If they ask for exact
+commands, give a numbered, copy-pasteable list. If the question needs
+information not covered above, say so honestly rather than guessing.
+"""
+
+    try:
+        answer = ask_groq(prompt)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+    return {"answer": answer}
 
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")

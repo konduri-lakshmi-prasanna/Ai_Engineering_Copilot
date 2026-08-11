@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import "./App.css";
 
 const STAGES = ["github", "logs", "reasoning"];
+const API_BASE = "http://127.0.0.1:8000";
 
 function App() {
   const [username, setUsername] = useState("");
@@ -15,12 +16,83 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [activeStage, setActiveStage] = useState(-1);
 
+  // --- OAuth state ---
+  const [oauthToken, setOauthToken] = useState(null);
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthError, setOauthError] = useState("");
+
+  // --- Conversation memory: last full analysis, so follow-up questions
+  // don't re-run the whole pipeline from scratch. ---
+  const [lastAnalysis, setLastAnalysis] = useState(null);
+
   const textareaRef = useRef(null);
   const threadEndRef = useRef(null);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  // Pick up ?token=... after GitHub redirects back from /auth/callback,
+  // store it, then strip it from the URL bar.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (token) {
+      setOauthToken(token);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Once we have an OAuth token, fetch the logged-in user's own repos
+  // (this can see private repos, unlike the public username lookup).
+  useEffect(() => {
+    if (!oauthToken) return;
+
+    const fetchOwnRepos = async () => {
+      setOauthLoading(true);
+      setOauthError("");
+      setRepos([]);
+      setRepoName("");
+      setResolvedUsername("");
+
+      try {
+        const response = await fetch(
+          `${API_BASE}/auth/repos?token=${encodeURIComponent(oauthToken)}`
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || `Server error: ${response.status}`);
+        }
+
+        setRepos(data);
+        setResolvedUsername("your GitHub account");
+        if (data.length > 0) {
+          setRepoName(data[0].full_name);
+        } else {
+          setOauthError("No repositories found on your account");
+        }
+      } catch (err) {
+        setOauthError(err.message);
+      } finally {
+        setOauthLoading(false);
+      }
+    };
+
+    fetchOwnRepos();
+  }, [oauthToken]);
+
+  const handleGitHubLogin = () => {
+    window.location.href = `${API_BASE}/auth/login`;
+  };
+
+  const handleLogout = () => {
+    setOauthToken(null);
+    setRepos([]);
+    setRepoName("");
+    setResolvedUsername("");
+    setOauthError("");
+  };
 
   const handleFetchRepos = async () => {
     const trimmed = username.trim();
@@ -34,7 +106,7 @@ function App() {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/github/repos?username=${encodeURIComponent(trimmed)}`
+        `${API_BASE}/github/repos?username=${encodeURIComponent(trimmed)}`
       );
       const data = await response.json();
 
@@ -69,6 +141,20 @@ function App() {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
 
+  // Rough heuristic: a fresh log/stack trace paste is usually multi-line
+  // and contains error-shaped language. Anything else, once we already
+  // have a prior analysis, is treated as a follow-up question about it.
+  const looksLikeNewLog = (text) => {
+    const lineCount = text.split("\n").length;
+    const hasErrorSignal = /error|exception|traceback|fail|stack trace/i.test(text);
+    return lineCount >= 2 && hasErrorSignal;
+  };
+
+  const handleNewAnalysis = () => {
+    setLastAnalysis(null);
+    setMessages([]);
+  };
+
   const handleSend = async () => {
     const text = input.trim();
     if (!text || !repoName || loading) return;
@@ -80,14 +166,47 @@ function App() {
     }
 
     setLoading(true);
-    setActiveStage(0);
 
+    const isFollowUp = lastAnalysis && !looksLikeNewLog(text);
+
+    if (isFollowUp) {
+      // Follow-up question — reuse the prior analysis instead of re-scanning.
+      try {
+        const response = await fetch(`${API_BASE}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repo_name: repoName,
+            context: lastAnalysis,
+            question: text,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `Server error: ${response.status}`);
+
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", type: "chat", content: data.answer },
+        ]);
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", type: "error", content: err.message },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // Fresh analysis — run the full pipeline.
+    setActiveStage(0);
     const stageTimer = setInterval(() => {
       setActiveStage((prev) => (prev < STAGES.length - 1 ? prev + 1 : prev));
     }, 700);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/analyze", {
+      const response = await fetch(`${API_BASE}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_name: repoName, log_text: text }),
@@ -99,6 +218,8 @@ function App() {
         throw new Error(data.detail || `Server error: ${response.status}`);
       }
 
+      setLastAnalysis(data);
+
       setMessages((prev) => [
         ...prev,
         {
@@ -106,10 +227,14 @@ function App() {
           type: "result",
           repo: data.repo,
           commitsScanned: data.commits_scanned,
+          scanMode: data.scan_mode,
           implicatedCommits: data.implicated_commits,
           errorsFound: data.errors_found,
           rootCause: data.root_cause,
           fixSuggestion: data.fix_suggestion,
+          whyItWorks: data.why_it_works,
+          beginnerExplanation: data.beginner_explanation,
+          interviewQuestions: data.interview_questions,
         },
       ]);
     } catch (err) {
@@ -154,30 +279,62 @@ function App() {
 
         <div className="field">
           <label className="field__label">
-            <span className="field__index">01</span> GitHub username or email
+            <span className="field__index">01</span> Connect a repo
           </label>
-          <input
-            className="field__input field__input--mono"
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={handleUsernameKeyDown}
-            placeholder="e.g. octocat or you@email.com"
-            spellCheck={false}
-          />
-          <button
-            type="button"
-            className="fetch-button fetch-button--full"
-            onClick={handleFetchRepos}
-            disabled={repoLoading || !username.trim()}
-          >
-            {repoLoading ? "Loading..." : "Fetch repos"}
-          </button>
-          {repoError && <div className="field__error">{repoError}</div>}
-          {resolvedUsername && !repoError && (
-            <div className="field__resolved">
-              Matched GitHub user: <strong>{resolvedUsername}</strong>
-            </div>
+
+          {oauthToken ? (
+            <>
+              <div className="field__resolved">
+                Connected via GitHub OAuth{" "}
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  style={{ marginLeft: 8, background: "none", border: "none", textDecoration: "underline", cursor: "pointer" }}
+                >
+                  Log out
+                </button>
+              </div>
+              {oauthLoading && <div className="field__resolved">Loading your repos...</div>}
+              {oauthError && <div className="field__error">{oauthError}</div>}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="fetch-button fetch-button--full"
+                onClick={handleGitHubLogin}
+              >
+                Login with GitHub
+              </button>
+
+              <div style={{ margin: "12px 0", opacity: 0.6, fontSize: 12, textAlign: "center" }}>
+                or browse public repos by username
+              </div>
+
+              <input
+                className="field__input field__input--mono"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyDown={handleUsernameKeyDown}
+                placeholder="e.g. octocat or you@email.com"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="fetch-button fetch-button--full"
+                onClick={handleFetchRepos}
+                disabled={repoLoading || !username.trim()}
+              >
+                {repoLoading ? "Loading..." : "Fetch repos"}
+              </button>
+              {repoError && <div className="field__error">{repoError}</div>}
+              {resolvedUsername && !repoError && (
+                <div className="field__resolved">
+                  Matched GitHub user: <strong>{resolvedUsername}</strong>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -204,6 +361,17 @@ function App() {
             </div>
           </div>
         )}
+
+        {messages.length > 0 && (
+          <button
+            type="button"
+            className="fetch-button fetch-button--full"
+            onClick={handleNewAnalysis}
+            style={{ marginTop: 12 }}
+          >
+            New analysis
+          </button>
+        )}
       </aside>
 
       <main className="chat">
@@ -221,6 +389,12 @@ function App() {
               <div key={i} className="bubble bubble--user">
                 <div className="bubble__content">{m.content}</div>
               </div>
+            ) : m.type === "chat" ? (
+              <div key={i} className="bubble bubble--assistant">
+                <div className="result">
+                  <div className="result__body">{m.content}</div>
+                </div>
+              </div>
             ) : m.type === "error" ? (
               <div key={i} className="bubble bubble--assistant">
                 <div className="result result--error">
@@ -234,7 +408,9 @@ function App() {
                   <div className="result__meta">
                     <span>{m.repo}</span>
                     <span className="result__dot">·</span>
-                    <span>{m.commitsScanned} commits scanned</span>
+                    <span>
+                      {m.commitsScanned} {m.scanMode === "targeted" ? "files scanned (targeted)" : "commits scanned"}
+                    </span>
                     <span className="result__dot">·</span>
                     <span>{m.errorsFound} errors found</span>
                   </div>
@@ -268,6 +444,37 @@ function App() {
                         Suggested fix
                       </div>
                       <div className="result__body">{m.fixSuggestion}</div>
+                    </>
+                  )}
+
+                  {m.whyItWorks && (
+                    <>
+                      <div className="result__label result__label--success" style={{ marginTop: 14 }}>
+                        Why this fix works
+                      </div>
+                      <div className="result__body">{m.whyItWorks}</div>
+                    </>
+                  )}
+
+                  {m.beginnerExplanation && (
+                    <>
+                      <div className="result__label result__label--success" style={{ marginTop: 14 }}>
+                        Learn: what's going on here
+                      </div>
+                      <div className="result__body">{m.beginnerExplanation}</div>
+                    </>
+                  )}
+
+                  {m.interviewQuestions && m.interviewQuestions.length > 0 && (
+                    <>
+                      <div className="result__label result__label--success" style={{ marginTop: 14 }}>
+                        Related interview questions
+                      </div>
+                      <ul className="result__body" style={{ margin: 0, paddingLeft: 18 }}>
+                        {m.interviewQuestions.map((q, qi) => (
+                          <li key={qi}>{q}</li>
+                        ))}
+                      </ul>
                     </>
                   )}
                 </div>
