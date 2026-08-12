@@ -298,12 +298,22 @@ body {
   box-shadow: 0 0 0 1px rgba(111, 251, 224, 0.2);
 }
 
+.repo-list__name-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.repo-list__name-wrap::-webkit-scrollbar {
+  display: none;
+}
+
 .repo-list__name {
+  display: inline-block;
   font-family: "JetBrains Mono", monospace;
   font-size: 12px;
   color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

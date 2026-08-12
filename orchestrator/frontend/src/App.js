@@ -201,6 +201,7 @@ function App() {
 
     // Fresh analysis — run the full pipeline.
     setActiveStage(0);
+
     const stageTimer = setInterval(() => {
       setActiveStage((prev) => (prev < STAGES.length - 1 ? prev + 1 : prev));
     }, 700);
@@ -311,28 +312,28 @@ function App() {
                 or browse public repos by username
               </div>
 
-              <input
-                className="field__input field__input--mono"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                onKeyDown={handleUsernameKeyDown}
-                placeholder="e.g. octocat or you@email.com"
-                spellCheck={false}
-              />
-              <button
-                type="button"
-                className="fetch-button fetch-button--full"
-                onClick={handleFetchRepos}
-                disabled={repoLoading || !username.trim()}
-              >
-                {repoLoading ? "Loading..." : "Fetch repos"}
-              </button>
-              {repoError && <div className="field__error">{repoError}</div>}
-              {resolvedUsername && !repoError && (
-                <div className="field__resolved">
-                  Matched GitHub user: <strong>{resolvedUsername}</strong>
-                </div>
+          <input
+            className="field__input field__input--mono"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={handleUsernameKeyDown}
+            placeholder="e.g. octocat or you@email.com"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className="fetch-button fetch-button--full"
+            onClick={handleFetchRepos}
+            disabled={repoLoading || !username.trim()}
+          >
+            {repoLoading ? "Loading..." : "Fetch repos"}
+          </button>
+          {repoError && <div className="field__error">{repoError}</div>}
+          {resolvedUsername && !repoError && (
+            <div className="field__resolved">
+              Matched GitHub user: <strong>{resolvedUsername}</strong>
+            </div>
               )}
             </>
           )}
