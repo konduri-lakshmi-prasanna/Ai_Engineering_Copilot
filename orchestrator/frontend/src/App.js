@@ -32,8 +32,6 @@ function App() {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // Pick up ?token=... after GitHub redirects back from /auth/callback,
-  // store it, then strip it from the URL bar.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
@@ -43,8 +41,6 @@ function App() {
     }
   }, []);
 
-  // Once we have an OAuth token, fetch the logged-in user's own repos
-  // (this can see private repos, unlike the public username lookup).
   useEffect(() => {
     if (!oauthToken) return;
 
@@ -86,12 +82,15 @@ function App() {
     window.location.href = `${API_BASE}/auth/login`;
   };
 
+  // Single logout/reset for BOTH paths: OAuth login and username lookup.
   const handleLogout = () => {
     setOauthToken(null);
+    setOauthError("");
+    setUsername("");
+    setResolvedUsername("");
     setRepos([]);
     setRepoName("");
-    setResolvedUsername("");
-    setOauthError("");
+    setRepoError("");
   };
 
   const handleFetchRepos = async () => {
@@ -141,9 +140,6 @@ function App() {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
 
-  // Rough heuristic: a fresh log/stack trace paste is usually multi-line
-  // and contains error-shaped language. Anything else, once we already
-  // have a prior analysis, is treated as a follow-up question about it.
   const looksLikeNewLog = (text) => {
     const lineCount = text.split("\n").length;
     const hasErrorSignal = /error|exception|traceback|fail|stack trace/i.test(text);
@@ -170,7 +166,6 @@ function App() {
     const isFollowUp = lastAnalysis && !looksLikeNewLog(text);
 
     if (isFollowUp) {
-      // Follow-up question — reuse the prior analysis instead of re-scanning.
       try {
         const response = await fetch(`${API_BASE}/chat`, {
           method: "POST",
@@ -199,7 +194,6 @@ function App() {
       return;
     }
 
-    // Fresh analysis — run the full pipeline.
     setActiveStage(0);
 
     const stageTimer = setInterval(() => {
@@ -257,6 +251,8 @@ function App() {
     }
   };
 
+  const isConnected = Boolean(oauthToken || resolvedUsername);
+
   return (
     <div className="app">
       <div className="particles" aria-hidden="true">
@@ -283,21 +279,16 @@ function App() {
             <span className="field__index">01</span> Connect a repo
           </label>
 
-          {oauthToken ? (
-            <>
-              <div className="field__resolved">
-                Connected via GitHub OAuth{" "}
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  style={{ marginLeft: 8, background: "none", border: "none", textDecoration: "underline", cursor: "pointer" }}
-                >
-                  Log out
-                </button>
-              </div>
-              {oauthLoading && <div className="field__resolved">Loading your repos...</div>}
-              {oauthError && <div className="field__error">{oauthError}</div>}
-            </>
+          {isConnected ? (
+            <div className="field__connected">
+              <span className="field__connected-status">
+                <span className="field__connected-dot" />
+                {oauthToken ? "Connected via GitHub" : <>Matched: <strong>{resolvedUsername}</strong></>}
+              </span>
+              <button type="button" className="logout-button" onClick={handleLogout}>
+                Log out
+              </button>
+            </div>
           ) : (
             <>
               <button
@@ -312,31 +303,29 @@ function App() {
                 or browse public repos by username
               </div>
 
-          <input
-            className="field__input field__input--mono"
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={handleUsernameKeyDown}
-            placeholder="e.g. octocat or you@email.com"
-            spellCheck={false}
-          />
-          <button
-            type="button"
-            className="fetch-button fetch-button--full"
-            onClick={handleFetchRepos}
-            disabled={repoLoading || !username.trim()}
-          >
-            {repoLoading ? "Loading..." : "Fetch repos"}
-          </button>
-          {repoError && <div className="field__error">{repoError}</div>}
-          {resolvedUsername && !repoError && (
-            <div className="field__resolved">
-              Matched GitHub user: <strong>{resolvedUsername}</strong>
-            </div>
-              )}
+              <input
+                className="field__input field__input--mono"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyDown={handleUsernameKeyDown}
+                placeholder="e.g. octocat or you@email.com"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="fetch-button fetch-button--full"
+                onClick={handleFetchRepos}
+                disabled={repoLoading || !username.trim()}
+              >
+                {repoLoading ? "Loading..." : "Fetch repos"}
+              </button>
+              {repoError && <div className="field__error">{repoError}</div>}
             </>
           )}
+
+          {oauthLoading && <div className="field__resolved">Loading your repos...</div>}
+          {oauthError && <div className="field__error">{oauthError}</div>}
         </div>
 
         {repos.length > 0 && (
@@ -355,7 +344,9 @@ function App() {
                   }
                   onClick={() => setRepoName(r.full_name)}
                 >
-                  <span className="repo-list__name">{r.full_name}</span>
+                  <span className="repo-list__name-wrap">
+                    <span className="repo-list__name">{r.full_name}</span>
+                  </span>
                   {r.private && <span className="repo-list__badge">private</span>}
                 </button>
               ))}

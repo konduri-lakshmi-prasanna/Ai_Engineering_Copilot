@@ -46,7 +46,6 @@ body {
     var(--void);
 }
 
-/* drifting particles — rise instead of fall */
 .particles {
   position: absolute;
   inset: 0;
@@ -92,8 +91,6 @@ body {
   100% { transform: translateY(-96vh) translateX(-6px); opacity: 0; }
 }
 
-/* ---------- sidebar ---------- */
-
 .sidebar {
   position: relative;
   z-index: 1;
@@ -101,6 +98,7 @@ body {
   flex-shrink: 0;
   height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 28px 22px;
   background: rgba(14, 17, 25, 0.6);
   backdrop-filter: blur(14px);
@@ -131,7 +129,6 @@ body {
   margin: 0;
 }
 
-/* signature element: a satellite orbiting a levitation ring */
 .header__mark {
   position: relative;
   width: 24px;
@@ -236,6 +233,69 @@ body {
   color: var(--spark);
 }
 
+.field__resolved {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--vapor);
+}
+
+.field__resolved strong {
+  color: var(--levitate);
+  font-weight: 600;
+}
+
+.field__connected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(111, 251, 224, 0.06);
+  border: 1px solid rgba(111, 251, 224, 0.25);
+  border-radius: 10px;
+}
+
+.field__connected-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--vapor);
+  min-width: 0;
+}
+
+.field__connected-status strong {
+  color: var(--levitate);
+  font-weight: 600;
+}
+
+.field__connected-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--levitate);
+  box-shadow: 0 0 6px 1px rgba(111, 251, 224, 0.6);
+  flex-shrink: 0;
+}
+
+.logout-button {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--field-edge-bright);
+  color: var(--vapor);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.logout-button:hover {
+  border-color: var(--spark);
+  color: var(--spark);
+}
+
 .fetch-button {
   background: transparent;
   border: 1px solid var(--field-edge-bright);
@@ -270,6 +330,11 @@ body {
   flex-direction: column;
   gap: 6px;
   padding-right: 2px;
+  scrollbar-width: none;
+}
+
+.repo-list::-webkit-scrollbar {
+  display: none;
 }
 
 .repo-list__item {
@@ -327,8 +392,6 @@ body {
   border-radius: 4px;
   padding: 2px 5px;
 }
-
-/* ---------- chat area ---------- */
 
 .chat {
   position: relative;
@@ -495,8 +558,6 @@ body {
   margin: 0 10px;
 }
 
-/* ---------- composer (chat input, ChatGPT/Claude-style) ---------- */
-
 .composer {
   position: relative;
   flex-shrink: 0;
@@ -616,8 +677,6 @@ body {
   color: #4a5063;
 }
 
-/* ---------- responsive ---------- */
-
 @media (max-width: 780px) {
   .app {
     flex-direction: column;
@@ -643,8 +702,6 @@ body {
     max-width: 88%;
   }
 }
-
-/* ---------- implicated commits list ---------- */
 
 .implicated {
   margin-bottom: 4px;
@@ -676,15 +733,4 @@ body {
   font-size: 13px;
   color: #d1d5e0;
   line-height: 1.5;
-}
-
-.field__resolved {
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--vapor);
-}
-
-.field__resolved strong {
-  color: var(--levitate);
-  font-weight: 600;
 }
