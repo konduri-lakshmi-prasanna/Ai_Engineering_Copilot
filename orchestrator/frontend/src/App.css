@@ -19,6 +19,7 @@
 html, body, #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
@@ -410,6 +411,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  scrollbar-width: none;
+}
+
+.chat__thread::-webkit-scrollbar {
+  display: none;
 }
 
 .chat__empty {
@@ -449,8 +455,13 @@ body {
   border-radius: 16px 16px 4px 16px;
   white-space: pre-wrap;
   font-family: "JetBrains Mono", monospace;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
+.bubble__content::-webkit-scrollbar {
+  display: none;
+}
 .bubble--assistant .result,
 .bubble--assistant .trace {
   max-width: 640px;
@@ -617,6 +628,11 @@ body {
   line-height: 1.6;
   max-height: 200px;
   padding: 6px 0;
+  scrollbar-width: none;
+}
+
+.composer__input::-webkit-scrollbar {
+  display: none;
 }
 
 .composer__input::placeholder {
