@@ -9,7 +9,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def ask_groq(prompt: str) -> str:
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -21,7 +21,7 @@ def ask_groq_json(prompt: str) -> str:
     so the reasoning step can be parsed programmatically instead of
     scraping free-form text."""
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         max_tokens=1500,
         response_format={"type": "json_object"},
         messages=[{"role": "user", "content": prompt}],

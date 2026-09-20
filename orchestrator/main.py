@@ -47,6 +47,7 @@ def analyze(request: AnalyzeRequest):
         })
     except Exception as e:
         error_msg = str(e)
+        print("REAL ERROR:", repr(error_msg))
         if "404" in error_msg or "Not Found" in error_msg:
             raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found or not accessible")
         if "403" in error_msg or "rate limit" in error_msg.lower():
