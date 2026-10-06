@@ -5,19 +5,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _get_repo(repo_name: str):
-    token = os.getenv("GITHUB_TOKEN")
+def _get_repo(repo_name: str, token: str | None = None):
+    # Prefer the logged-in user's OAuth token (can see their private repos);
+    # fall back to the server-level token from .env.
+    token = token or os.getenv("GITHUB_TOKEN")
     gh = Github(token)
     return gh.get_repo(repo_name)
 
 
-def github_agent_targeted(repo_name: str, file_paths: list, commits_per_file: int = 5) -> dict:
+def github_agent_targeted(repo_name: str, file_paths: list, commits_per_file: int = 5, token: str | None = None) -> dict:
     """
     For each file path pulled from the log's stack trace, fetches that
     file's actual current content plus the real commits that last touched
     it — the real error source, instead of a guess from recent activity.
     """
-    repo = _get_repo(repo_name)
+    repo = _get_repo(repo_name, token)
 
     result = {"repo": repo_name, "files": []}
     for path in file_paths:
@@ -55,13 +57,13 @@ def github_agent_targeted(repo_name: str, file_paths: list, commits_per_file: in
 
     return result
 
-def fetch_package_json(repo_name: str) -> dict | None:
+def fetch_package_json(repo_name: str, token: str | None = None) -> dict | None:
     """
     Fetches package.json's scripts field directly — the ground truth for
     npm 'missing script' errors. Checks the repo root first, then common
     frontend subfolder names, since many repos nest the frontend app.
     """
-    repo = _get_repo(repo_name)
+    repo = _get_repo(repo_name, token)
     candidate_paths = [
         "package.json",
         "frontend/package.json",
@@ -88,13 +90,13 @@ def fetch_package_json(repo_name: str) -> dict | None:
 
 
 
-def github_agent(repo_name: str, limit: int = 8) -> dict:
+def github_agent(repo_name: str, limit: int = 8, token: str | None = None) -> dict:
     """
     Fallback: fetches the most recent `limit` commits with a short diff
     snippet per changed file. Used only when the log doesn't contain any
     identifiable file paths, so we have nothing to target directly.
     """
-    repo = _get_repo(repo_name)
+    repo = _get_repo(repo_name, token)
     commits = repo.get_commits()[:limit]
 
     result = {"repo": repo_name, "commits": []}

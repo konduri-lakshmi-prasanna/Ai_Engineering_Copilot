@@ -161,6 +161,20 @@ function App() {
       textareaRef.current.style.height = "auto";
     }
 
+    // No analysis yet and this doesn't look like a log/stack trace: don't run
+    // the whole pipeline on a plain question, ask for a log instead.
+    if (!lastAnalysis && !/error|exception|traceback|fail|stack trace|npm err|\bat .+:\d+/i.test(text)) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          type: "error",
+          content: "Paste a stack trace or deploy log first. Once I've analysed it, you can ask follow-up questions like this one.",
+        },
+      ]);
+      return;
+    }
+
     setLoading(true);
 
     const isFollowUp = lastAnalysis && !looksLikeNewLog(text);
@@ -204,7 +218,7 @@ function App() {
       const response = await fetch(`${API_BASE}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo_name: repoName, log_text: text }),
+        body: JSON.stringify({ repo_name: repoName, log_text: text, github_token: oauthToken || null }),
       });
 
       const data = await response.json();

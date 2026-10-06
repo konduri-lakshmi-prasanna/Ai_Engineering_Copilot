@@ -2,6 +2,8 @@ import os
 import re
 import json
 import httpx
+import traceback
+from github import GithubException
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -28,6 +30,7 @@ REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 class AnalyzeRequest(BaseModel):
     repo_name: str = Field(..., description="Format: owner/repo, e.g. facebook/react")
     log_text: str = Field(..., min_length=1)
+    github_token: str | None = Field(None, description="User OAuth token (optional)")
 
 
 @app.post("/analyze")
@@ -40,19 +43,34 @@ def analyze(request: AnalyzeRequest):
             detail="repo_name must be in the format 'owner/repo', e.g. facebook/react",
         )
 
+    print(f"[analyze] repo={repo_name} user_token_received={bool(request.github_token)}")
+
     try:
         result = copilot_graph.invoke({
             "repo_name": repo_name,
             "log_text": request.log_text,
+            "github_token": request.github_token or "",
         })
+    except GithubException as e:
+        traceback.print_exc()
+        gh_msg = (e.data or {}).get("message", "") if isinstance(e.data, dict) else str(e.data)
+        if e.status == 404:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"GitHub returned 404 for '{repo_name}' ({gh_msg}). The repo is private or "
+                    "your token can't see it. Log out and log in with GitHub again."
+                ),
+            )
+        if e.status == 401:
+            raise HTTPException(status_code=401, detail="GitHub token is invalid or expired. Log out and log in again.")
+        if e.status == 403:
+            raise HTTPException(status_code=429, detail=f"GitHub refused the request ({gh_msg}). Rate limit or missing permission.")
+        raise HTTPException(status_code=502, detail=f"GitHub error {e.status}: {gh_msg}")
     except Exception as e:
-        error_msg = str(e)
-        print("REAL ERROR:", repr(error_msg))
-        if "404" in error_msg or "Not Found" in error_msg:
-            raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found or not accessible")
-        if "403" in error_msg or "rate limit" in error_msg.lower():
-            raise HTTPException(status_code=429, detail="GitHub API rate limit hit — try again shortly")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {error_msg}")
+        # Not a GitHub problem (e.g. Groq model/API key error) - show the real message.
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Analysis failed ({type(e).__name__}): {e}")
 
     github_data = result["github_data"]
     scan_mode = github_data.get("mode", "recent")
@@ -73,6 +91,8 @@ def analyze(request: AnalyzeRequest):
         "why_it_works": result.get("why_it_works", ""),
         "beginner_explanation": result.get("beginner_explanation", ""),
         "interview_questions": result.get("interview_questions", []),
+        "documentation_links": result.get("documentation_links", []),
+        "documentation": result.get("docs_data", {}).get("results", []),
     }
 
 
