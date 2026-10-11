@@ -462,6 +462,7 @@ body {
 .bubble__content::-webkit-scrollbar {
   display: none;
 }
+
 .bubble--assistant .result,
 .bubble--assistant .trace {
   max-width: 640px;
@@ -749,4 +750,65 @@ body {
   font-size: 13px;
   color: #d1d5e0;
   line-height: 1.5;
+}
+
+/* ---------- Deployment Agent ---------- */
+
+.deploy-button {
+  width: 100%;
+  margin-top: 12px;
+  background: rgba(111, 251, 224, 0.08);
+  border: 1px solid var(--levitate);
+  color: var(--levitate);
+  border-radius: 10px;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.deploy-button:hover:not(:disabled) {
+  background: rgba(111, 251, 224, 0.14);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 18px -8px rgba(111, 251, 224, 0.45);
+}
+
+.deploy-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.deployment {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 122, 144, 0.06);
+  border: 1px solid #3d2129;
+  border-radius: 10px;
+}
+
+.deployment__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--spark);
+  margin-bottom: 6px;
+}
+
+.deployment__meta {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--vapor);
+  line-height: 1.6;
+}
+
+.deployment__link {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--levitate);
+  text-decoration: none;
+}
+
+.deployment__link:hover {
+  text-decoration: underline;
 }

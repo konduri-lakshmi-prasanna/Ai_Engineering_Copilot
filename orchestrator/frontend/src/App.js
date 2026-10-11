@@ -2,7 +2,31 @@ import { useState, useRef, useEffect } from "react";
 import "./App.css";
 
 const STAGES = ["github", "logs", "reasoning"];
+const DEPLOY_STAGES = ["deployment", "github", "logs", "reasoning"];
+const STAGE_LABELS = {
+  deployment: "Fetching failed run",
+  github: "Reading commits",
+  logs: "Parsing log",
+  reasoning: "Reasoning",
+};
 const API_BASE = "http://127.0.0.1:8000";
+
+// Turns an /analyze or /analyze/deployment response into a chat message.
+const toResultMessage = (data) => ({
+  role: "assistant",
+  type: "result",
+  repo: data.repo,
+  commitsScanned: data.commits_scanned,
+  scanMode: data.scan_mode,
+  implicatedCommits: data.implicated_commits,
+  errorsFound: data.errors_found,
+  rootCause: data.root_cause,
+  fixSuggestion: data.fix_suggestion,
+  whyItWorks: data.why_it_works,
+  beginnerExplanation: data.beginner_explanation,
+  interviewQuestions: data.interview_questions,
+  deployment: data.deployment || null,
+});
 
 function App() {
   const [username, setUsername] = useState("");
@@ -15,6 +39,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeStage, setActiveStage] = useState(-1);
+  const [stages, setStages] = useState(STAGES);
 
   // --- OAuth state ---
   const [oauthToken, setOauthToken] = useState(null);
@@ -208,6 +233,7 @@ function App() {
       return;
     }
 
+    setStages(STAGES);
     setActiveStage(0);
 
     const stageTimer = setInterval(() => {
@@ -229,23 +255,55 @@ function App() {
 
       setLastAnalysis(data);
 
+      setMessages((prev) => [...prev, toResultMessage(data)]);
+    } catch (err) {
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          type: "result",
-          repo: data.repo,
-          commitsScanned: data.commits_scanned,
-          scanMode: data.scan_mode,
-          implicatedCommits: data.implicated_commits,
-          errorsFound: data.errors_found,
-          rootCause: data.root_cause,
-          fixSuggestion: data.fix_suggestion,
-          whyItWorks: data.why_it_works,
-          beginnerExplanation: data.beginner_explanation,
-          interviewQuestions: data.interview_questions,
-        },
+        { role: "assistant", type: "error", content: err.message },
       ]);
+    } finally {
+      clearInterval(stageTimer);
+      setActiveStage(-1);
+      setLoading(false);
+    }
+  };
+
+  // Deployment Agent: fetch the repo's latest failed GitHub Actions run and
+  // analyze its log, no pasting needed.
+  const handleCheckDeployment = async () => {
+    if (!repoName || loading) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: `Check the latest deployment for ${repoName}` },
+    ]);
+    setLoading(true);
+    setStages(DEPLOY_STAGES);
+    setActiveStage(0);
+
+    const stageTimer = setInterval(() => {
+      setActiveStage((prev) => (prev < DEPLOY_STAGES.length - 1 ? prev + 1 : prev));
+    }, 1200);
+
+    try {
+      const response = await fetch(`${API_BASE}/analyze/deployment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_name: repoName, token: oauthToken }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `Server error: ${response.status}`);
+
+      if (data.status === "analyzed") {
+        setLastAnalysis(data);
+        setMessages((prev) => [...prev, toResultMessage(data)]);
+      } else {
+        // no runs / no failures / no logs: just tell the user in plain words
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", type: "chat", content: data.message },
+        ]);
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -368,6 +426,17 @@ function App() {
           </div>
         )}
 
+        {repoName && (
+          <button
+            type="button"
+            className="deploy-button"
+            onClick={handleCheckDeployment}
+            disabled={loading}
+          >
+            Check latest deployment
+          </button>
+        )}
+
         {messages.length > 0 && (
           <button
             type="button"
@@ -385,7 +454,7 @@ function App() {
           {messages.length === 0 && (
             <div className="chat__empty">
               {repoName
-                ? `Paste an error or deploy log for ${repoName} below to get started.`
+                ? `Paste an error or deploy log for ${repoName} below, or click "Check latest deployment" to pull the failed run from GitHub Actions automatically.`
                 : "Pick a repo on the left, then paste an error or deploy log below."}
             </div>
           )}
@@ -411,6 +480,44 @@ function App() {
             ) : (
               <div key={i} className="bubble bubble--assistant">
                 <div className="result">
+                  {m.deployment && (
+                    <div className="deployment">
+                      <div className="deployment__title">
+                        Failed run: {m.deployment.run.name}
+                        {m.deployment.run.run_number ? ` #${m.deployment.run.run_number}` : ""}
+                      </div>
+                      <div className="deployment__meta">
+                        {m.deployment.run.branch && <span>branch {m.deployment.run.branch}</span>}
+                        {m.deployment.run.sha && (
+                          <>
+                            <span className="result__dot">·</span>
+                            <span>commit {m.deployment.run.sha}</span>
+                          </>
+                        )}
+                        {m.deployment.failed_job && (
+                          <>
+                            <span className="result__dot">·</span>
+                            <span>job {m.deployment.failed_job}</span>
+                          </>
+                        )}
+                      </div>
+                      {m.deployment.failed_steps.length > 0 && (
+                        <div className="deployment__meta">
+                          failed step: {m.deployment.failed_steps.join(", ")}
+                        </div>
+                      )}
+                      {m.deployment.run.url && (
+                        <a
+                          className="deployment__link"
+                          href={m.deployment.run.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View run on GitHub ↗
+                        </a>
+                      )}
+                    </div>
+                  )}
                   <div className="result__meta">
                     <span>{m.repo}</span>
                     <span className="result__dot">·</span>
@@ -491,7 +598,7 @@ function App() {
           {loading && (
             <div className="bubble bubble--assistant">
               <div className="trace">
-                {STAGES.map((stage, i) => (
+                {stages.map((stage, i) => (
                   <div key={stage} className="trace__item">
                     <div
                       className={
@@ -500,12 +607,8 @@ function App() {
                         (i === activeStage ? " trace__dot--active" : "")
                       }
                     />
-                    <span className="trace__label">
-                      {stage === "github" && "Reading commits"}
-                      {stage === "logs" && "Parsing log"}
-                      {stage === "reasoning" && "Reasoning"}
-                    </span>
-                    {i < STAGES.length - 1 && <div className="trace__line" />}
+                    <span className="trace__label">{STAGE_LABELS[stage]}</span>
+                    {i < stages.length - 1 && <div className="trace__line" />}
                   </div>
                 ))}
               </div>
