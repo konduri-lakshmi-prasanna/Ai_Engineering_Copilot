@@ -2,12 +2,11 @@ import os
 import re
 import json
 import httpx
-import traceback
-from github import GithubException
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from graph import build_graph
+from agents.deployment_agent import deployment_agent, DeploymentAgentError
 from auth import router as auth_router
 from llm_client import ask_groq
 
@@ -30,47 +29,35 @@ REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 class AnalyzeRequest(BaseModel):
     repo_name: str = Field(..., description="Format: owner/repo, e.g. facebook/react")
     log_text: str = Field(..., min_length=1)
-    github_token: str | None = Field(None, description="User OAuth token (optional)")
 
 
-@app.post("/analyze")
-def analyze(request: AnalyzeRequest):
-    repo_name = request.repo_name.strip()
-
+def _validate_repo(repo_name: str) -> str:
+    repo_name = repo_name.strip()
     if not REPO_PATTERN.match(repo_name):
         raise HTTPException(
             status_code=400,
             detail="repo_name must be in the format 'owner/repo', e.g. facebook/react",
         )
+    return repo_name
 
-    print(f"[analyze] repo={repo_name} user_token_received={bool(request.github_token)}")
 
+def _run_analysis(repo_name: str, log_text: str) -> dict:
+    """Runs the GitHub -> logs -> reasoning pipeline on a log and builds the
+    response. Shared by /analyze (pasted log) and /analyze/deployment
+    (log fetched automatically from GitHub Actions)."""
     try:
         result = copilot_graph.invoke({
             "repo_name": repo_name,
-            "log_text": request.log_text,
-            "github_token": request.github_token or "",
+            "log_text": log_text,
         })
-    except GithubException as e:
-        traceback.print_exc()
-        gh_msg = (e.data or {}).get("message", "") if isinstance(e.data, dict) else str(e.data)
-        if e.status == 404:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"GitHub returned 404 for '{repo_name}' ({gh_msg}). The repo is private or "
-                    "your token can't see it. Log out and log in with GitHub again."
-                ),
-            )
-        if e.status == 401:
-            raise HTTPException(status_code=401, detail="GitHub token is invalid or expired. Log out and log in again.")
-        if e.status == 403:
-            raise HTTPException(status_code=429, detail=f"GitHub refused the request ({gh_msg}). Rate limit or missing permission.")
-        raise HTTPException(status_code=502, detail=f"GitHub error {e.status}: {gh_msg}")
     except Exception as e:
-        # Not a GitHub problem (e.g. Groq model/API key error) - show the real message.
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Analysis failed ({type(e).__name__}): {e}")
+        error_msg = str(e)
+        print("REAL ERROR:", repr(error_msg))
+        if "404" in error_msg or "Not Found" in error_msg:
+            raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found or not accessible")
+        if "403" in error_msg or "rate limit" in error_msg.lower():
+            raise HTTPException(status_code=429, detail="GitHub API rate limit hit — try again shortly")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {error_msg}")
 
     github_data = result["github_data"]
     scan_mode = github_data.get("mode", "recent")
@@ -91,9 +78,51 @@ def analyze(request: AnalyzeRequest):
         "why_it_works": result.get("why_it_works", ""),
         "beginner_explanation": result.get("beginner_explanation", ""),
         "interview_questions": result.get("interview_questions", []),
-        "documentation_links": result.get("documentation_links", []),
-        "documentation": result.get("docs_data", {}).get("results", []),
     }
+
+
+@app.post("/analyze")
+def analyze(request: AnalyzeRequest):
+    repo_name = _validate_repo(request.repo_name)
+    return _run_analysis(repo_name, request.log_text)
+
+
+class DeploymentRequest(BaseModel):
+    repo_name: str = Field(..., description="Format: owner/repo")
+    token: str | None = Field(None, description="GitHub OAuth token, if the user logged in")
+
+
+@app.post("/analyze/deployment")
+def analyze_deployment(request: DeploymentRequest):
+    """
+    Deployment Agent entry point: finds the repo's latest failed GitHub
+    Actions run, downloads the failing job's log, and runs the normal
+    analysis on it, so the user never has to paste a log.
+    """
+    repo_name = _validate_repo(request.repo_name)
+
+    try:
+        deployment = deployment_agent(repo_name, token=request.token)
+    except DeploymentAgentError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+    if deployment["status"] != "failed_run_found":
+        return {"status": deployment["status"], "message": deployment["message"]}
+
+    if not deployment["log_text"].strip():
+        return {
+            "status": "no_logs",
+            "message": deployment.get("log_note") or "The failed run has no log to analyze.",
+        }
+
+    analysis = _run_analysis(repo_name, deployment["log_text"])
+    analysis["status"] = "analyzed"
+    analysis["deployment"] = {
+        "run": deployment["run"],
+        "failed_job": deployment["failed_job"],
+        "failed_steps": deployment["failed_steps"],
+    }
+    return analysis
 
 
 class ChatRequest(BaseModel):
