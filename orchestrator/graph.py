@@ -1,215 +1,285 @@
-import json
+import uuid
+from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Dict, Any
-from agents.github_agent import github_agent, github_agent_targeted, fetch_package_json
-from agents.log_parser import extract_file_paths
+
+from schemas import CopilotState
+from agents.orchestrator_agent import plan_investigation, synthesize_final_report
+from agents.github_agent import run_github_investigation
 from agents.logs_agent import logs_agent
-from agents.docs_rag_agent import docs_rag_agent
-from llm_client import ask_groq_json
+from agents.log_parser import extract_file_paths
+from agents.cicd_agent import cicd_agent
+from agents.infra_agent import infra_agent
+from agents.docs_rag_agent import knowledge_agent
+from agents.verification_agent import verify_investigation
 
 
-class CopilotState(TypedDict):
-    repo_name: str
-    log_text: str
-    github_token: str
-    github_data: dict
-    logs_data: dict
-    docs_data: dict
-    implicated_commits: List[Dict[str, Any]]
-    root_cause: str
-    fix_suggestion: str
-    why_it_works: str
-    beginner_explanation: str
-    interview_questions: List[str]
-    documentation_links: List[str]
+def plan_node(state: CopilotState) -> Dict[str, Any]:
+    repo = state.get("repo_name", "")
+    log_text = state.get("log_text", "")
+    incident_id = state.get("incident_id") or str(uuid.uuid4())[:8]
+
+    plan = plan_investigation(repo, log_text)
+    event = {
+        "stage": "plan",
+        "agent": "Orchestrator Agent",
+        "status": "COMPLETED",
+        "message": f"Formulated investigation plan with specialists: {', '.join(plan.required_specialists)}",
+    }
+    events = list(state.get("events", []))
+    events.append(event)
+
+    return {
+        "incident_id": incident_id,
+        "active_plan": plan.model_dump(),
+        "investigation_round": state.get("investigation_round", 1),
+        "max_rounds": state.get("max_rounds", 2),
+        "events": events,
+    }
 
 
-def github_node(state: CopilotState) -> CopilotState:
-    file_paths = extract_file_paths(state["log_text"])
+def github_node(state: CopilotState) -> Dict[str, Any]:
+    file_paths = extract_file_paths(state.get("log_text", ""))
     token = state.get("github_token") or None
-
-    if file_paths:
-        # We found real file paths in the stack trace — go fetch exactly
-        # those files and their real history instead of guessing.
-        data = github_agent_targeted(state["repo_name"], file_paths, token=token)
-        data["mode"] = "targeted"
-    else:
-        # No identifiable file path in the log — fall back to a blind
-        # recent-commits scan.
-        data = github_agent(state["repo_name"], limit=8, token=token)
-        data["mode"] = "recent"
-
-    # Always fetch package.json's scripts — it's the ground truth for
-    # npm "missing script" errors, regardless of which mode ran above.
-    data["package_json"] = fetch_package_json(state["repo_name"], token=token)
-
-    state["github_data"] = data
-    return state
+    out = run_github_investigation(state.get("repo_name", ""), file_paths=file_paths, token=token)
+    return {"github_output": out.model_dump()}
 
 
-def logs_node(state: CopilotState) -> CopilotState:
-    state["logs_data"] = logs_agent(state["log_text"])
-    return state
+def logs_node(state: CopilotState) -> Dict[str, Any]:
+    out = logs_agent(state.get("log_text", ""))
+    return {"logs_output": out.model_dump()}
 
 
-def docs_node(state: CopilotState) -> CopilotState:
-    # Query the local RAG knowledge base using the actual error lines
-    # found in the log — not the raw log_text — so retrieval is grounded
-    # in the specific error signal rather than diluted by noise.
-    error_lines = state["logs_data"].get("errors", [])
-    query_text = " ".join(error_lines[:20])
-    state["docs_data"] = docs_rag_agent(query_text, top_k=3)
-    return state
+def cicd_node(state: CopilotState) -> Dict[str, Any]:
+    token = state.get("github_token") or None
+    out = cicd_agent(state.get("repo_name", ""), state.get("log_text", ""), token=token)
+    return {"cicd_output": out.model_dump()}
 
 
-def reasoning_node(state: CopilotState) -> CopilotState:
-    github_data = state["github_data"]
-    mode = github_data.get("mode", "recent")
+def infra_node(state: CopilotState) -> Dict[str, Any]:
+    token = state.get("github_token") or None
+    out = infra_agent(state.get("repo_name", ""), state.get("log_text", ""), token=token)
+    return {"infra_output": out.model_dump()}
 
-    if mode == "targeted":
-        evidence = []
-        for f in github_data["files"]:
-            entry = {"file": f["path"], "found_in_repo": f["found"]}
-            if f["found"]:
-                entry["current_content_snippet"] = f["current_content"]
-            if f.get("error"):
-                entry["note"] = f["error"]
-            entry["recent_commits_touching_this_file"] = [
-                {"sha": c["sha"], "message": c["message"], "patch": c["patch"]}
-                for c in f["commits"]
-            ]
-            evidence.append(entry)
 
-        evidence_json = json.dumps(evidence, indent=2)
-        evidence_label = (
-            "the specific files named in the stack trace/log, each with its "
-            "current content and the real recent commits that touched it"
-        )
-    else:
-        commits_context = []
-        for c in github_data["commits"]:
-            commits_context.append({
-                "sha": c["sha"],
-                "message": c["message"][:200],
-                "files": [
-                    {"filename": f["filename"], "status": f["status"], "patch": f["patch"]}
-                    for f in c["files"]
-                ],
+def merge_node(state: CopilotState) -> Dict[str, Any]:
+    outputs: Dict[str, Dict[str, Any]] = {}
+    merged_findings: List[Dict[str, Any]] = []
+
+    events = list(state.get("events", []))
+
+    for key, out_key in [("github", "github_output"), ("logs", "logs_output"), ("cicd", "cicd_output"), ("infra", "infra_output")]:
+        out = state.get(out_key)
+        if out:
+            outputs[key] = out
+            merged_findings.extend(out.get("findings", []))
+            events.append({
+                "stage": key,
+                "agent": out.get("agent_name", key),
+                "status": out.get("status", "COMPLETED"),
+                "message": out.get("summary", ""),
             })
-        evidence_json = json.dumps(commits_context, indent=2)
-        evidence_label = (
-            "the most recent commits in the repo (no specific file could be "
-            "identified from the log, so this is a broader recent-activity scan)"
-        )
 
-    # This is now OUTSIDE the if/else, so it applies in both modes.
-    package_json_info = github_data.get("package_json")
-    package_json_block = (
-        f"\npackage.json scripts (ground truth — if the error mentions a missing "
-        f"npm script, check here directly, don't guess):\n{json.dumps(package_json_info, indent=2)}\n"
-        if package_json_info else ""
+    events.append({
+        "stage": "merge",
+        "agent": "Orchestrator Agent",
+        "status": "COMPLETED",
+        "message": f"Aggregated {len(merged_findings)} findings across parallel specialist investigations.",
+    })
+
+    return {
+        "agent_outputs": outputs,
+        "merged_findings": merged_findings,
+        "events": events,
+    }
+
+
+def docs_node(state: CopilotState) -> Dict[str, Any]:
+    logs_out = state.get("logs_output", {})
+    error_snippets = [
+        ev.get("snippet", "")
+        for ev in logs_out.get("supporting_evidence", [])
+        if ev.get("source_type") == "log_line"
+    ]
+    query = " ".join(error_snippets[:10]) or state.get("log_text", "")[:200]
+
+    out = knowledge_agent(query, top_k=3)
+    agent_outputs = dict(state.get("agent_outputs", {}))
+    agent_outputs["docs"] = out.model_dump()
+
+    events = list(state.get("events", []))
+    events.append({
+        "stage": "docs",
+        "agent": "Knowledge and Documentation Agent",
+        "status": out.status.value,
+        "message": out.summary,
+    })
+
+    return {
+        "docs_output": out.model_dump(),
+        "agent_outputs": agent_outputs,
+        "events": events,
+    }
+
+
+def verification_node(state: CopilotState) -> Dict[str, Any]:
+    agent_outputs = state.get("agent_outputs", {})
+    log_text = state.get("log_text", "")
+
+    logs_summary = agent_outputs.get("logs", {}).get("summary", "")
+    github_findings = agent_outputs.get("github", {}).get("findings", [])
+    proposed_cause = github_findings[0].get("description") if github_findings else logs_summary
+    proposed_fix = "Correct the implicated configuration or update dependencies."
+
+    ver_result = verify_investigation(agent_outputs, proposed_cause, proposed_fix, log_text)
+
+    events = list(state.get("events", []))
+    events.append({
+        "stage": "verification",
+        "agent": "Verification Agent",
+        "status": "COMPLETED" if ver_result.is_sufficient else "INSUFFICIENT_DATA",
+        "message": (
+            f"Evidence {'sufficient' if ver_result.is_sufficient else 'insufficient'}. "
+            f"Confirmed facts: {len(ver_result.confirmed_facts)}, Contradictions: {len(ver_result.contradictions_found)}."
+        ),
+    })
+
+    return {
+        "verification": ver_result.model_dump(),
+        "events": events,
+    }
+
+
+def route_verification(state: CopilotState) -> str:
+    ver = state.get("verification") or {}
+    round_no = state.get("investigation_round", 1)
+    max_rounds = state.get("max_rounds", 2)
+
+    if ver.get("needs_reinvestigation") and round_no < max_rounds:
+        return "reinvestigate"
+    return "final_report"
+
+
+def reinvestigate_node(state: CopilotState) -> Dict[str, Any]:
+    new_round = state.get("investigation_round", 1) + 1
+    events = list(state.get("events", []))
+    events.append({
+        "stage": "reinvestigate",
+        "agent": "Orchestrator Agent",
+        "status": "RUNNING",
+        "message": f"Entering investigation round {new_round} to resolve unverified assumptions.",
+    })
+    return {
+        "investigation_round": new_round,
+        "events": events,
+    }
+
+
+def final_report_node(state: CopilotState) -> Dict[str, Any]:
+    incident_id = state.get("incident_id", "inc-1")
+    repo = state.get("repo_name", "")
+    log_text = state.get("log_text", "")
+    agent_outputs = state.get("agent_outputs", {})
+    verification = state.get("verification", {})
+    rounds = state.get("investigation_round", 1)
+
+    report = synthesize_final_report(
+        incident_id=incident_id,
+        repo_name=repo,
+        log_text=log_text,
+        agent_outputs=agent_outputs,
+        verification_dict=verification,
+        investigation_rounds=rounds,
     )
 
-    # Documentation retrieved from the local RAG knowledge base. Only
-    # included if something actually matched — an empty list means the
-    # model should not pretend it has relevant docs to lean on.
-    docs_results = state.get("docs_data", {}).get("results", [])
-    docs_block = ""
-    if docs_results:
-        docs_context = [
-            {"title": d["title"], "url": d["url"], "summary": d["snippet"]}
-            for d in docs_results
-        ]
-        docs_block = (
-            f"\nRelevant documentation retrieved from the knowledge base "
-            f"(use this to inform root_cause/fix_suggestion and cite the "
-            f"url(s) in documentation_links if you actually use them):\n"
-            f"{json.dumps(docs_context, indent=2)}\n"
-        )
+    events = list(state.get("events", []))
+    events.append({
+        "stage": "final_report",
+        "agent": "Orchestrator Agent",
+        "status": "COMPLETED",
+        "message": "Final incident report generated and verified.",
+    })
 
-    prompt = f"""
-You are an AI Engineering Copilot analyzing a deployment failure. You don't
-just diagnose — you also teach. The person reading your output may be a
-student or junior developer, so explain things clearly.
+    implicated = [
+        {"sha": ev.reference.replace("commit:", ""), "reason": ev.relevance}
+        for ev in report.supporting_evidence if "commit:" in ev.reference
+    ]
 
-You are given {evidence_label}, plus errors extracted from a deployment log.
-
-Evidence:
-{evidence_json}
-{package_json_block}
-{docs_block}
-Log errors:
-{json.dumps(state['logs_data']['errors'][:20], indent=2)}
-
-Task:
-0. Ground your answer only in the evidence actually provided above. If the
-   evidence doesn't clearly explain the error, say so plainly in root_cause
-   instead of inventing a plausible-sounding but unverified explanation.
-1. Identify which file(s)/commit(s) above are actually responsible for the
-   reported errors, based on the real content/diffs shown — not guesses.
-   There could be one, several, or none. Reference specific commit sha(s)
-   where relevant.
-2. Explain the root cause concretely.
-3. Suggest a specific fix.
-4. Explain WHY that fix works — the underlying mechanism, not just "this fixes it".
-5. Write a beginner_explanation: 2-4 sentences explaining the general concept
-   behind this bug, as if teaching someone new to the topic.
-6. Write 2-3 short interview_questions related to the concept behind this bug.
-7. If the documentation block above has entries you actually used, list their
-   url(s) in documentation_links. If it's empty or irrelevant, return an
-   empty list — don't invent a link.
-
-Respond ONLY with a JSON object in exactly this shape, no other text:
-{{
-  "implicated_commits": [{{"sha": "<short sha>", "reason": "<why this is likely responsible>"}}],
-  "root_cause": "<explanation>",
-  "fix_suggestion": "<concrete fix>",
-  "why_it_works": "<why the suggested fix resolves the root cause>",
-  "beginner_explanation": "<plain-language explanation of the underlying concept>",
-  "interview_questions": ["<question 1>", "<question 2>"],
-  "documentation_links": ["<url 1>"]
-}}
-
-If nothing above appears responsible, return an empty list for
-implicated_commits and say so plainly in root_cause. Still fill in
-beginner_explanation and interview_questions based on the log errors alone.
-"""
-
-    raw = ask_groq_json(prompt)
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        parsed = {
-            "implicated_commits": [],
-            "root_cause": raw or "The model did not return a parseable result.",
-            "fix_suggestion": "",
-            "why_it_works": "",
-            "beginner_explanation": "",
-            "interview_questions": [],
-            "documentation_links": [],
-        }
-
-    state["implicated_commits"] = parsed.get("implicated_commits", [])
-    state["root_cause"] = parsed.get("root_cause", "")
-    state["fix_suggestion"] = parsed.get("fix_suggestion", "")
-    state["why_it_works"] = parsed.get("why_it_works", "")
-    state["beginner_explanation"] = parsed.get("beginner_explanation", "")
-    state["interview_questions"] = parsed.get("interview_questions", [])
-    state["documentation_links"] = parsed.get("documentation_links", [])
-    return state
+    return {
+        "final_report": report.model_dump(),
+        "root_cause": report.most_likely_root_cause,
+        "fix_suggestion": report.recommended_fix,
+        "why_it_works": report.why_it_works,
+        "beginner_explanation": report.beginner_explanation,
+        "interview_questions": report.interview_questions,
+        "documentation_links": [
+            ev.reference for ev in report.supporting_evidence if ev.source_type.value == "documentation"
+        ],
+        "implicated_commits": implicated,
+        "github_data": {
+            "mode": "targeted",
+            "files": [],
+            "commits": implicated,
+        },
+        "logs_data": {
+            "error_count": len([ev for ev in report.supporting_evidence if ev.source_type.value == "log_line"]),
+            "errors": [ev.snippet for ev in report.supporting_evidence if ev.source_type.value == "log_line"],
+        },
+        "docs_data": {
+            "results": [
+                {"title": ev.reference, "url": "", "snippet": ev.snippet}
+                for ev in report.supporting_evidence if ev.source_type.value == "documentation"
+            ]
+        },
+        "events": events,
+    }
 
 
 def build_graph():
     graph = StateGraph(CopilotState)
+
+    # Add all agent nodes
+    graph.add_node("plan", plan_node)
     graph.add_node("github", github_node)
     graph.add_node("logs", logs_node)
+    graph.add_node("cicd", cicd_node)
+    graph.add_node("infra", infra_node)
+    graph.add_node("merge", merge_node)
     graph.add_node("docs", docs_node)
-    graph.add_node("reasoning", reasoning_node)
+    graph.add_node("verification", verification_node)
+    graph.add_node("reinvestigate", reinvestigate_node)
+    graph.add_node("final_report", final_report_node)
 
-    graph.set_entry_point("github")
-    graph.add_edge("github", "logs")
-    graph.add_edge("logs", "docs")
-    graph.add_edge("docs", "reasoning")
-    graph.add_edge("reasoning", END)
+    # Entry and Parallel Dispatch (Fan-out)
+    graph.set_entry_point("plan")
+    graph.add_edge("plan", "github")
+    graph.add_edge("plan", "logs")
+    graph.add_edge("plan", "cicd")
+    graph.add_edge("plan", "infra")
+
+    # Fan-in to Merge
+    graph.add_edge("github", "merge")
+    graph.add_edge("logs", "merge")
+    graph.add_edge("cicd", "merge")
+    graph.add_edge("infra", "merge")
+
+    # Knowledge correlation & Verification
+    graph.add_edge("merge", "docs")
+    graph.add_edge("docs", "verification")
+
+    # Conditional routing after verification
+    graph.add_conditional_edges(
+        "verification",
+        route_verification,
+        {
+            "reinvestigate": "reinvestigate",
+            "final_report": "final_report",
+        },
+    )
+
+    # Bounded retry loop back to specialists
+    graph.add_edge("reinvestigate", "github")
+
+    # Final report to END
+    graph.add_edge("final_report", END)
 
     return graph.compile()

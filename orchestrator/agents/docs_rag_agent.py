@@ -2,13 +2,18 @@ import os
 import re
 import math
 from collections import Counter
+from typing import Dict, Any, List
+
+from schemas import (
+    AgentOutput,
+    AgentExecutionStatus,
+    SpecialistFinding,
+    EvidenceItem,
+    EvidenceType,
+    FindingSeverity,
+)
 
 # Curated local knowledge base of common deployment-failure categories.
-# Each file is a short markdown doc with a --- frontmatter block (title,
-# tags, url) followed by an explanation. This is intentionally NOT scraped
-# from the live web at request time: it's small, fast, offline, and every
-# fact in it is something we wrote and can vouch for, rather than something
-# an LLM might mis-cite from an external page.
 _DOCS_DIR = os.path.join(os.path.dirname(__file__), "docs")
 
 _STOPWORDS = {
@@ -28,16 +33,6 @@ def _tokenize(text: str) -> list:
 
 
 def _parse_doc(path: str) -> dict:
-    """
-    Parses a knowledge-base markdown file with a simple frontmatter block:
-
-        ---
-        title: ...
-        tags: comma, separated, tags
-        url: https://...
-        ---
-        body text...
-    """
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
 
@@ -59,9 +54,6 @@ def _parse_doc(path: str) -> dict:
                 url = value
 
     body = body.strip()
-    # Tags are indexed alongside the body but not shown in the snippet —
-    # they exist purely to nudge matching for short/keyword-heavy queries
-    # (e.g. an error string that's mostly a package/error name).
     searchable_text = f"{title} {tags} {body}"
 
     return {
@@ -83,8 +75,6 @@ def _load_corpus() -> list:
     return corpus
 
 
-# Loaded once per process — the knowledge base is small and static, so
-# there's no need to re-read and re-tokenize files on every request.
 _CORPUS = _load_corpus()
 
 
@@ -95,7 +85,6 @@ def _build_idf(corpus: list) -> dict:
         for term in set(doc["tokens"]):
             doc_freq[term] += 1
 
-    # Standard smoothed IDF so terms appearing in every doc don't zero out.
     return {
         term: math.log((1 + doc_count) / (1 + freq)) + 1
         for term, freq in doc_freq.items()
@@ -129,15 +118,7 @@ def _cosine_similarity(vec_a: dict, vec_b: dict) -> float:
 
 
 def docs_rag_agent(query_text: str, top_k: int = 3, min_score: float = 0.05) -> dict:
-    """
-    Retrieves the most relevant local knowledge-base entries for a given
-    query (typically the log error lines, joined into one string).
-
-    Returns a dict with the query and a ranked list of results, each with
-    title, url, a short snippet, and its similarity score. Results below
-    min_score are dropped rather than forcing irrelevant docs into context —
-    an empty result list is a valid, honest answer when nothing matches.
-    """
+    """Legacy helper returning dict of matched docs."""
     if not query_text or not _CORPUS:
         return {"query": query_text, "results": []}
 
@@ -163,3 +144,54 @@ def docs_rag_agent(query_text: str, top_k: int = 3, min_score: float = 0.05) -> 
     ]
 
     return {"query": query_text, "results": results}
+
+
+def knowledge_agent(query_text: str, top_k: int = 3) -> AgentOutput:
+    """
+    Knowledge and Documentation Agent.
+    Retrieves relevant technical documentation and verified incident remediation guides.
+    Never fabricates docs or URLs; reports clearly when no match exists.
+    """
+    raw_res = docs_rag_agent(query_text, top_k=top_k)
+    results = raw_res.get("results", [])
+
+    evidence: List[EvidenceItem] = []
+    findings: List[SpecialistFinding] = []
+
+    for item in results:
+        ev = EvidenceItem(
+            source_type=EvidenceType.DOCUMENTATION,
+            reference=f"doc:{item['title']} ({item.get('url', 'local')})",
+            snippet=item["snippet"],
+            relevance=f"Knowledge base match with similarity score {item.get('score', 0.0)}",
+        )
+        evidence.append(ev)
+        findings.append(
+            SpecialistFinding(
+                category="Verified Knowledge Base Reference",
+                description=f"Documentation matches issue symptoms: {item['title']}. Excerpt: {item['snippet'][:150]}...",
+                severity=FindingSeverity.INFO,
+                confidence=min(1.0, float(item.get("score", 0.5)) * 1.5),
+                evidence_items=[ev],
+            )
+        )
+
+    summary = (
+        f"Knowledge Agent retrieved {len(results)} relevant documentation reference(s) matching error patterns."
+        if results
+        else "Knowledge Agent found no verified documentation matching this specific failure pattern."
+    )
+
+    status = AgentExecutionStatus.COMPLETED if results else AgentExecutionStatus.INSUFFICIENT_DATA
+
+    return AgentOutput(
+        agent_name="Knowledge and Documentation Agent",
+        status=status,
+        summary=summary,
+        findings=findings,
+        supporting_evidence=evidence,
+        confidence_estimate=0.85 if results else 0.0,
+        unresolved_questions=[] if results else ["No matching internal playbook found; consider documenting fix once verified."],
+        recommended_next_steps=[f"Review documentation at {r['url']}" for r in results if r.get("url")],
+        integration_status={"corpus_size": len(_CORPUS), "results_count": len(results)},
+    )

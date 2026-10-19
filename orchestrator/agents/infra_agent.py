@@ -1,7 +1,7 @@
 import os
 import re
 from typing import Dict, Any, Optional, List
-from github import Github
+from github import Github, Auth
 from schemas import (
     AgentOutput,
     AgentExecutionStatus,
@@ -34,7 +34,7 @@ def infra_agent(repo_name: str, log_text: str, token: Optional[str] = None) -> A
     # 1. Inspect repository infrastructure files (Dockerfile, docker-compose)
     if token:
         try:
-            gh = Github(token)
+            gh = Github(auth=Auth.Token(token))
             repo = gh.get_repo(repo_name)
             for path in ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", "k8s/deployment.yaml"]:
                 try:

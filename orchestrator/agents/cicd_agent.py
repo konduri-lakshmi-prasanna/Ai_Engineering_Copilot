@@ -2,7 +2,7 @@ import os
 import re
 import yaml
 from typing import Dict, Any, Optional, List
-from github import Github
+from github import Github, Auth
 from schemas import (
     AgentOutput,
     AgentExecutionStatus,
@@ -31,7 +31,7 @@ def cicd_agent(repo_name: str, log_text: str, token: Optional[str] = None) -> Ag
     # 1. Fetch workflow configurations from repository if accessible
     if token:
         try:
-            gh = Github(token)
+            gh = Github(auth=Auth.Token(token))
             repo = gh.get_repo(repo_name)
             try:
                 contents = repo.get_contents(".github/workflows")

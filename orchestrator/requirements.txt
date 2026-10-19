@@ -1,7 +1,14 @@
 fastapi
 uvicorn
 langgraph
+langchain
+langchain-core
 groq
 PyGithub
 python-dotenv
 httpx
+pydantic
+mcp
+sse-starlette
+pyyaml
+pytest

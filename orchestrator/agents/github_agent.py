@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 from typing import Dict, Any, Optional, List
-from github import Github, GithubException
+from github import Github, GithubException, Auth
 from dotenv import load_dotenv
 
 from schemas import (
@@ -20,7 +20,10 @@ load_dotenv()
 
 def _get_repo(repo_name: str, token: Optional[str] = None):
     token = token or os.getenv("GITHUB_TOKEN")
-    gh = Github(token)
+    if token:
+        gh = Github(auth=Auth.Token(token))
+    else:
+        gh = Github()
     return gh.get_repo(repo_name)
 
 

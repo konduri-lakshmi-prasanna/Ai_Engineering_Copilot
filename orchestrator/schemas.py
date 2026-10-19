@@ -95,7 +95,7 @@ class IncidentReport(BaseModel):
     agent_summaries: Dict[str, str] = Field(default_factory=dict)
 
 
-class CopilotState(TypedDict):
+class CopilotState(TypedDict, total=False):
     incident_id: str
     repo_name: str
     log_text: str
@@ -103,8 +103,24 @@ class CopilotState(TypedDict):
     active_plan: Dict[str, Any]
     investigation_round: int
     max_rounds: int
+    github_output: Dict[str, Any]
+    logs_output: Dict[str, Any]
+    cicd_output: Dict[str, Any]
+    infra_output: Dict[str, Any]
+    docs_output: Dict[str, Any]
     agent_outputs: Dict[str, Dict[str, Any]]
     merged_findings: List[Dict[str, Any]]
     verification: Optional[Dict[str, Any]]
     final_report: Optional[Dict[str, Any]]
     events: List[Dict[str, Any]]
+    # Backwards-compatibility fields for legacy callers
+    github_data: dict
+    logs_data: dict
+    docs_data: dict
+    implicated_commits: List[Dict[str, Any]]
+    root_cause: str
+    fix_suggestion: str
+    why_it_works: str
+    beginner_explanation: str
+    interview_questions: List[str]
+    documentation_links: List[str]
