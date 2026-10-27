@@ -76,7 +76,31 @@ The project includes genuine **Model Context Protocol (MCP)** support via the of
 
 ---
 
-## 4. API Endpoints
+## 4. Docker Containerization & Deployment (Phase 10)
+
+The entire system is containerized with production-ready multi-stage Dockerfiles and Docker Compose orchestration:
+
+### Architecture:
+- **Backend Container (`copilot-backend`)**: Python 3.11-slim base with Node.js runtime for internal MCP server execution, non-root `copilot` user, automated healthcheck, and Uvicorn server on port `8000`.
+- **Frontend Container (`copilot-frontend`)**: Multi-stage build (Node.js 20 build -> Nginx 1.25-alpine production serve) on port `3000` (mapped from Nginx port 80) with SPA routing and security headers.
+- **Network**: Isolated bridge network `copilot-net` with `service_healthy` startup dependency.
+
+### One-Command Production Launch:
+```bash
+docker compose up --build
+```
+- Frontend UI: [http://localhost:3000](http://localhost:3000)
+- Backend API: [http://localhost:8000](http://localhost:8000)
+- Interactive API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Development Mode with Live Code Reloading:
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+---
+
+## 5. API Endpoints
 
 FastAPI server runs on port `8000`:
 
@@ -94,17 +118,18 @@ FastAPI server runs on port `8000`:
 
 ---
 
-## 5. Security & Input Sanitization
+## 6. Security & Input Sanitization
 
 - **No Hardcoded Credentials**: Real API keys and tokens are loaded strictly via environment variables.
 - **Log Payload Caps**: Logs are capped at `500,000` characters (`MAX_LOG_SIZE_CHARS`) to eliminate denial-of-service memory exhaustion.
-- **Configurable CORS**: CORS is restricted to configurable origins via `CORS_ORIGINS` (defaults to `http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173`).
+- **Configurable CORS**: CORS is restricted to configurable origins via `CORS_ORIGINS` (defaults to `http://localhost:3000,http://127.0.0.1:3000,http://localhost:80`).
 - **Read-Only Invariants**: Agents never execute arbitrary bash scripts or write unverified changes without explicit engineer action.
 - **Prompt Injection Defense**: Raw logs and repository files are handled strictly as untrusted data inputs rather than agent instructions.
+- **Container Hardening**: Backend runs as unprivileged user `copilot`; frontend runs minimal Alpine Nginx.
 
 ---
 
-## 6. Setup & Execution
+## 7. Setup & Local Execution (Without Docker)
 
 ### Prerequisites
 - Python 3.11+
@@ -129,14 +154,13 @@ Frontend runs at `http://localhost:3000`.
 
 ### Running Automated Tests
 ```bash
-cd orchestrator
-python -m pytest tests/ -v
+python -m pytest orchestrator/tests/ -v
 ```
-All 15 automated test cases validate agents, LangGraph orchestration, API validation, and MCP fallback.
+All 20 automated test cases validate agents, LangGraph orchestration, API validation, MCP fallback, and Docker container configurations.
 
 ---
 
-## 7. Milestone Roadmap to 25 October 2026
+## 8. Milestone Roadmap to 25 October 2026
 
 | Phase / Day | Target Date | Milestone & Deliverable | Status |
 |---|---|---|---|
@@ -148,8 +172,8 @@ All 15 automated test cases validate agents, LangGraph orchestration, API valida
 | **Phase 6** | **16 Oct 2026** | LangGraph StateGraph compiled with parallel fan-out, fan-in, and bounded retry loop. | Completed |
 | **Phase 7** | **17 Oct 2026** | FastAPI endpoints upgraded: `/analyze`, SSE streaming `/analyze/stream`, context `/chat`, `/health`. | Completed |
 | **Phase 8** | **18 Oct 2026** | React frontend upgraded with multi-agent cards, tabbed report, and live agent indicators. | Completed |
-| **Phase 9 (Today)** | **19 Oct 2026** | End-to-end integration testing, LangGraph channel fix, 100% pytest suite pass, React production build. | **Completed & Verified** |
-| **Phase 10** | **20 Oct 2026** | Docker containerization (`Dockerfile` and `docker-compose.yml`) for seamless local execution. | Scheduled |
+| **Phase 9** | **19 Oct 2026** | End-to-end integration testing, LangGraph delta return fix, React production build. | Completed |
+| **Phase 10 (Today)** | **20 Oct 2026** | **Docker Containerization**: Multi-stage `Dockerfile` (Backend + Node.js for MCP), Frontend Nginx `Dockerfile`, `docker-compose.yml`, `docker-compose.dev.yml`, and 20/20 passing tests. | **Completed & Verified** |
 | **Phase 11** | **21 Oct 2026** | Multi-fixture log corpus expansion (adding sample logs for Kubernetes CrashLoop, OOM, and npm scripts). | Scheduled |
 | **Phase 12** | **22 Oct 2026** | Advanced MCP tool enhancements (code search tool and git diff range inspection). | Scheduled |
 | **Phase 13** | **23 Oct 2026** | End-to-end security audit, input validation stress testing, and rate limiting verification. | Scheduled |

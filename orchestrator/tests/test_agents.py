@@ -79,6 +79,20 @@ def test_infra_agent_signals():
     assert any("Container Lifecycle" in c for c in categories)
 
 
+def test_infra_agent_docker_build_failure():
+    log = """
+    Step 4/10 : COPY package.json ./
+    COPY failed: stat package.json: file does not exist
+    failed to solve with frontend dockerfile.v0
+    """
+    out = infra_agent("org/repo", log, token=None)
+    assert isinstance(out, AgentOutput)
+    assert out.status == AgentExecutionStatus.COMPLETED
+    categories = [f.category for f in out.findings]
+    assert any("Docker Build Context" in c or "Docker Build Step Failure" in c for c in categories)
+    assert any(ev.source_type == EvidenceType.INFRA_EVENT for ev in out.supporting_evidence)
+
+
 def test_knowledge_agent_retrieval():
     out = knowledge_agent("cors header missing access-control-allow-origin", top_k=2)
     assert isinstance(out, AgentOutput)

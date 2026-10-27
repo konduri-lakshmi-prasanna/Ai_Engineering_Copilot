@@ -66,6 +66,11 @@ def infra_agent(repo_name: str, log_text: str, token: Optional[str] = None) -> A
         (r"standard_init_linux\.go:\d+: exec user process caused: (.*)", "Container Runtime Exec", "Container entrypoint failed to execute."),
         (r"(?:ENV|DATABASE_URL|PORT|SECRET|API_KEY).*(?:is undefined|is null|missing|not set)", "Environment Configuration", "Mandatory environment variable missing in runtime container context."),
         (r"bind: address already in use|port \d+ already allocated", "Port Allocation Conflict", "Container failed to bind to target port because it is already occupied."),
+        (r"COPY failed: (?:.*)not found in build context|COPY failed: stat (.*): file does not exist", "Docker Build Context", "A COPY or ADD command in the Dockerfile referenced a file not present in the build context."),
+        (r"failed to solve with frontend dockerfile\.v0|ERROR: failed to solve: process (?:.*) did not complete successfully", "Docker Build Step Failure", "A RUN build command in the Dockerfile failed during image build."),
+        (r"docker: Error response from daemon: (.*)", "Docker Daemon Failure", "Docker daemon returned a runtime error when launching or attaching to container."),
+        (r"Cannot connect to the Docker daemon at (?:.*)\. Is the docker daemon running\?", "Docker Daemon Unreachable", "The Docker engine daemon is not active or user lacks docker socket permissions."),
+        (r"manifest for (?:.*) not found: manifest unknown|pull access denied for (?:.*)", "Docker Image Pull Failure", "Docker base image tag does not exist or requires authentication."),
     ]
 
     for pattern, cat, desc in infra_error_patterns:
