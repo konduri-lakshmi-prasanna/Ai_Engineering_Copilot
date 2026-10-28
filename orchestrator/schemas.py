@@ -66,6 +66,7 @@ class VerificationResult(BaseModel):
     unsupported_assumptions: List[str] = Field(default_factory=list, description="Hypotheses lacking tangible evidence")
     validation_performed: str = Field("", description="Safe bounded validation performed")
     fix_validation_result: str = Field("", description="Whether suggested fix matches root cause mechanism")
+    code_verification: Optional[Dict[str, Any]] = Field(default=None, description="Detailed code verification against repository files")
 
 
 class InvestigationPlan(BaseModel):

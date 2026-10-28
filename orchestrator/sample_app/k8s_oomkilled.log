@@ -1,0 +1,16 @@
+2026-10-21T09:00:00Z INFO  [k8s-event] Scheduling pod data-processor-5f8c9d7b6-xyzab on node worker-2
+2026-10-21T09:00:05Z INFO  Successfully pulled image "registry.acme.com/data-processor:v1.9.0"
+2026-10-21T09:00:06Z INFO  Started container data-processor
+2026-10-21T09:00:07Z INFO  [data-processor] Worker startup — loading full dataset into memory
+2026-10-21T09:00:08Z INFO  [data-processor] Reading CSV batch_export_2026.csv (2.1 GB)
+2026-10-21T09:01:15Z WARNING [data-processor] Memory usage: 480 MiB / 512 MiB limit
+2026-10-21T09:01:17Z ERROR [data-processor] MemoryError: unable to allocate 134217728 bytes for array
+2026-10-21T09:01:17Z ERROR [data-processor]   File "app/batch/processor.py", line 88, in load_dataset
+2026-10-21T09:01:17Z ERROR [data-processor]     df = pd.read_csv(file_path)
+2026-10-21T09:01:18Z INFO  [k8s-event] Container data-processor OOMKilled (exit code 137)
+2026-10-21T09:01:18Z WARNING [k8s-event] pod data-processor-5f8c9d7b6-xyzab killed: OOMKilled
+2026-10-21T09:01:18Z WARNING [k8s-event] Container exceeded memory limit: 512Mi
+2026-10-21T09:01:28Z INFO  Restarting container data-processor (restart count: 1)
+2026-10-21T09:02:31Z INFO  [k8s-event] Container data-processor OOMKilled (exit code 137, restart count: 1)
+2026-10-21T09:02:31Z WARNING [k8s-event] pod/data-processor-5f8c9d7b6-xyzab: CrashLoopBackOff (OOMKilled)
+2026-10-21T09:04:10Z ERROR [k8s-event] Node worker-2: SystemOOM — kube-system evicted a pod to reclaim memory

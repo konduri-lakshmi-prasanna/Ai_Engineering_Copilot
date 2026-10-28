@@ -9,7 +9,7 @@ from schemas import (
     EvidenceType,
     FindingSeverity,
 )
-from agents.log_parser import extract_file_paths
+from agents.log_parser import extract_file_paths, detect_error_type
 
 
 def logs_agent(log_text: str) -> AgentOutput:
@@ -18,13 +18,14 @@ def logs_agent(log_text: str) -> AgentOutput:
     - Parses deployment logs and application stack traces deterministically.
     - Extracts error lines, exception types, and file locations.
     - Distinguishes primary root errors from cascading/secondary errors.
+    - Detects Kubernetes OOMKilled, CrashLoopBackOff, and npm build failures.
     - Generates evidence-backed hypotheses without treating every warning as a root cause.
     """
     lines = log_text.splitlines()
     error_lines = [
         (idx + 1, line)
         for idx, line in enumerate(lines)
-        if re.search(r"(error|exception|fail|traceback|fatal|panic|err:)", line, re.IGNORECASE)
+        if re.search(r"(error|exception|fail|traceback|fatal|panic|err:|oomkilled|crashloop)", line, re.IGNORECASE)
     ]
 
     evidence: List[EvidenceItem] = []
@@ -33,7 +34,77 @@ def logs_agent(log_text: str) -> AgentOutput:
     # 1. Deterministic extraction of stack traces and file paths
     extracted_paths = extract_file_paths(log_text, max_files=8)
 
-    # 2. Extract top error lines as concrete evidence
+    # 2. High-level error type detection (OOM, CrashLoop, npm, exit codes)
+    error_type = detect_error_type(log_text)
+
+    # 3. OOMKilled / CrashLoopBackOff findings
+    if error_type["is_oom"]:
+        exit_code_note = ""
+        if 137 in error_type["exit_codes"]:
+            exit_code_note = " (exit code 137 confirms OOM kill signal)"
+        oom_ev = EvidenceItem(
+            source_type=EvidenceType.LOG_LINE,
+            reference="log:oom_signal",
+            snippet=f"OOMKilled detected{exit_code_note}. Pod(s): {', '.join(error_type['pod_names']) or 'unknown'}",
+            relevance="Kernel killed the container process due to memory limit breach",
+        )
+        evidence.append(oom_ev)
+        findings.append(
+            SpecialistFinding(
+                category="OOMKilled — Memory Limit Exceeded",
+                description=(
+                    f"Container was killed by the OOM killer{exit_code_note}. "
+                    "Root cause is likely a memory leak or insufficient resources.limits.memory."
+                ),
+                severity=FindingSeverity.CRITICAL,
+                confidence=0.97,
+                evidence_items=[oom_ev],
+            )
+        )
+
+    if error_type["is_crashloop"]:
+        cl_ev = EvidenceItem(
+            source_type=EvidenceType.LOG_LINE,
+            reference="log:crashloop_signal",
+            snippet=f"CrashLoopBackOff detected. Pod(s): {', '.join(error_type['pod_names']) or 'unknown'}",
+            relevance="Kubernetes keeps restarting the container because it exits repeatedly",
+        )
+        evidence.append(cl_ev)
+        findings.append(
+            SpecialistFinding(
+                category="CrashLoopBackOff",
+                description=(
+                    "Pod is in CrashLoopBackOff. Container exits on every restart. "
+                    "Check container exit code and logs from previous container instance."
+                ),
+                severity=FindingSeverity.CRITICAL,
+                confidence=0.97,
+                evidence_items=[cl_ev],
+            )
+        )
+
+    if error_type["is_npm_failure"]:
+        npm_ev = EvidenceItem(
+            source_type=EvidenceType.LOG_LINE,
+            reference="log:npm_failure",
+            snippet="npm ERR! / ELIFECYCLE / Exit status detected — npm script failed.",
+            relevance="CI/CD npm build or script step exited with non-zero status",
+        )
+        evidence.append(npm_ev)
+        findings.append(
+            SpecialistFinding(
+                category="npm Build / Script Failure",
+                description=(
+                    "npm run script exited with error. Likely cause: TypeScript compile error, "
+                    "missing env variable, or node version mismatch."
+                ),
+                severity=FindingSeverity.HIGH,
+                confidence=0.93,
+                evidence_items=[npm_ev],
+            )
+        )
+
+    # 4. Extract top error lines as concrete evidence
     primary_error_line = None
     cascading_error_lines = []
 
@@ -52,7 +123,7 @@ def logs_agent(log_text: str) -> AgentOutput:
         else:
             cascading_error_lines.append((line_no, line_content))
 
-    # 3. Create structured findings
+    # 5. Create structured findings for stack trace errors
     if primary_error_line:
         line_no, line_content = primary_error_line
         # Detect exception type
@@ -94,7 +165,7 @@ def logs_agent(log_text: str) -> AgentOutput:
                 evidence_items=[
                     EvidenceItem(
                         source_type=EvidenceType.LOG_LINE,
-                        reference=f"stack_trace:paths",
+                        reference="stack_trace:paths",
                         snippet=", ".join(extracted_paths),
                         relevance="Files referenced directly in exception stack frames",
                     )
@@ -109,7 +180,18 @@ def logs_agent(log_text: str) -> AgentOutput:
         else "Log Analysis Agent processed log text but found no explicit error keywords or stack traces."
     )
 
-    status = AgentExecutionStatus.COMPLETED if error_lines else AgentExecutionStatus.INSUFFICIENT_DATA
+    # Enrich summary with K8s specifics
+    k8s_tags = []
+    if error_type["is_oom"]:
+        k8s_tags.append("OOMKilled")
+    if error_type["is_crashloop"]:
+        k8s_tags.append("CrashLoopBackOff")
+    if error_type["is_npm_failure"]:
+        k8s_tags.append("npm build failure")
+    if k8s_tags:
+        summary += f" Detected signals: {', '.join(k8s_tags)}."
+
+    status = AgentExecutionStatus.COMPLETED if (error_lines or findings) else AgentExecutionStatus.INSUFFICIENT_DATA
 
     return AgentOutput(
         agent_name="Log Analysis Agent",
@@ -117,7 +199,7 @@ def logs_agent(log_text: str) -> AgentOutput:
         summary=summary,
         findings=findings,
         supporting_evidence=evidence,
-        confidence_estimate=0.9 if primary_error_line else 0.2,
+        confidence_estimate=0.9 if primary_error_line or findings else 0.2,
         unresolved_questions=(
             ["Some log lines truncated in snippet; full context may contain earlier warnings."]
             if len(lines) > 500
@@ -130,5 +212,6 @@ def logs_agent(log_text: str) -> AgentOutput:
             "total_lines": len(lines),
             "errors_found": len(error_lines),
             "paths_extracted": extracted_paths,
+            "error_type": error_type,
         },
     )

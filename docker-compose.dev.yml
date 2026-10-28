@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  backend-dev:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: copilot-backend-dev
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./orchestrator:/app
+    env_file:
+      - ./orchestrator/.env
+    environment:
+      - PORT=8000
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+    networks:
+      - copilot-dev-net
+
+  frontend-dev:
+    image: node:20-alpine
+    container_name: copilot-frontend-dev
+    working_dir: /app
+    volumes:
+      - ./orchestrator/frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    command: ["npm", "start"]
+    depends_on:
+      - backend-dev
+    environment:
+      - WDS_SOCKET_PORT=0
+    networks:
+      - copilot-dev-net
+
+networks:
+  copilot-dev-net:
+    driver: bridge

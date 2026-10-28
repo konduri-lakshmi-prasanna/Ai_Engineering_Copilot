@@ -34,6 +34,15 @@ function App() {
   // Context memory for follow-up chat
   const [lastAnalysis, setLastAnalysis] = useState(null);
 
+  // Connected repository code snapshot
+  const [repoSnapshot, setRepoSnapshot] = useState(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+
+  // Code Viewer state
+  const [codeFile, setCodeFile] = useState(null);        // { path, content, language, truncated }
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeError, setCodeError] = useState("");
+
   const textareaRef = useRef(null);
   const threadEndRef = useRef(null);
 
@@ -84,6 +93,29 @@ function App() {
 
     fetchOwnRepos();
   }, [oauthToken]);
+
+  useEffect(() => {
+    if (!repoName) {
+      setRepoSnapshot(null);
+      return;
+    }
+    const fetchRepoSnapshot = async () => {
+      setSnapshotLoading(true);
+      try {
+        const tokenQuery = oauthToken ? `&token=${encodeURIComponent(oauthToken)}` : "";
+        const res = await fetch(`${API_BASE}/github/repo/inspect?repo_name=${encodeURIComponent(repoName)}${tokenQuery}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRepoSnapshot(data);
+        }
+      } catch (e) {
+        console.warn("Could not inspect repo code:", e);
+      } finally {
+        setSnapshotLoading(false);
+      }
+    };
+    fetchRepoSnapshot();
+  }, [repoName, oauthToken]);
 
   const handleGitHubLogin = () => {
     window.location.href = `${API_BASE}/auth/login`;
@@ -154,6 +186,29 @@ function App() {
     setLastAnalysis(null);
     setMessages([]);
     setAgentStatuses({});
+    setCodeFile(null);
+    setCodeError("");
+  };
+
+  const fetchFileCode = async (filePath) => {
+    if (!repoName || !filePath) return;
+    setCodeLoading(true);
+    setCodeError("");
+    setCodeFile(null);
+    setActiveTab("code");
+    try {
+      const tokenQuery = oauthToken ? `&token=${encodeURIComponent(oauthToken)}` : "";
+      const res = await fetch(
+        `${API_BASE}/github/repo/code?repo_name=${encodeURIComponent(repoName)}&file_path=${encodeURIComponent(filePath)}${tokenQuery}`
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+      setCodeFile({ path: data.file_path, content: data.content, language: data.language, truncated: data.truncated });
+    } catch (err) {
+      setCodeError(err.message);
+    } finally {
+      setCodeLoading(false);
+    }
   };
 
   const handleSend = async () => {
@@ -379,6 +434,45 @@ function App() {
                 </button>
               ))}
             </div>
+
+            {snapshotLoading && (
+              <div style={{ fontSize: "11px", color: "#8b93ab", marginTop: "8px" }}>
+                Scanning repository code & structure...
+              </div>
+            )}
+
+            {repoSnapshot && !snapshotLoading && (
+              <div style={{
+                marginTop: "10px",
+                padding: "8px 10px",
+                borderRadius: "6px",
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.06)",
+                fontSize: "11px",
+              }}>
+                <div style={{ color: "#6ffbe0", fontWeight: 600, marginBottom: "4px" }}>
+                  Repository Code Overview
+                </div>
+                <div style={{ color: "#eef1f8" }}>
+                  Language: <strong>{repoSnapshot.language}</strong>
+                </div>
+                {repoSnapshot.manifests_detected?.length > 0 && (
+                  <div style={{ color: "#8b93ab", marginTop: "2px" }}>
+                    Manifests: {repoSnapshot.manifests_detected.join(", ")}
+                  </div>
+                )}
+                {Object.keys(repoSnapshot.scripts || {}).length > 0 && (
+                  <div style={{ color: "#8b93ab", marginTop: "2px" }}>
+                    Scripts: {Object.keys(repoSnapshot.scripts).join(", ")}
+                  </div>
+                )}
+                {repoSnapshot.recent_commits?.length > 0 && (
+                  <div style={{ color: "#8b93ab", marginTop: "4px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "4px" }}>
+                    Latest: <code style={{ color: "#9b8cff" }}>{repoSnapshot.recent_commits[0].sha}</code> {repoSnapshot.recent_commits[0].message}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -473,49 +567,30 @@ function App() {
                   </div>
 
                   {/* Tabs */}
-                  <div style={{ display: "flex", gap: "8px", margin: "14px 0", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "6px" }}>
-                    <button
-                      type="button"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: activeTab === "report" ? "#6ffbe0" : "#8b93ab",
-                        fontWeight: activeTab === "report" ? 600 : 400,
-                        cursor: "pointer",
-                        padding: "4px 8px",
-                      }}
-                      onClick={() => setActiveTab("report")}
-                    >
-                      Root Cause & Fix
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: activeTab === "verification" ? "#6ffbe0" : "#8b93ab",
-                        fontWeight: activeTab === "verification" ? 600 : 400,
-                        cursor: "pointer",
-                        padding: "4px 8px",
-                      }}
-                      onClick={() => setActiveTab("verification")}
-                    >
-                      Verification & Evidence
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: activeTab === "agents" ? "#6ffbe0" : "#8b93ab",
-                        fontWeight: activeTab === "agents" ? 600 : 400,
-                        cursor: "pointer",
-                        padding: "4px 8px",
-                      }}
-                      onClick={() => setActiveTab("agents")}
-                    >
-                      Specialist Agents ({Object.keys(m.agentOutputs || {}).length})
-                    </button>
+                  <div style={{ display: "flex", gap: "4px", margin: "14px 0", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "6px", flexWrap: "wrap" }}>
+                    {["report", "verification", "agents", "code"].map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: activeTab === tab ? "#6ffbe0" : "#8b93ab",
+                          fontWeight: activeTab === tab ? 600 : 400,
+                          cursor: "pointer",
+                          padding: "4px 10px",
+                          borderRadius: "4px",
+                          background: activeTab === tab ? "rgba(111,251,224,0.08)" : "none",
+                          fontSize: "13px",
+                        }}
+                        onClick={() => setActiveTab(tab)}
+                      >
+                        {tab === "report" && "Root Cause & Fix"}
+                        {tab === "verification" && "Verification & Evidence"}
+                        {tab === "agents" && `Specialist Agents (${Object.keys(m.agentOutputs || {}).length})`}
+                        {tab === "code" && (codeLoading ? "⏳ Code Viewer" : codeFile ? `📄 ${codeFile.path.split("/").pop()}` : "📄 Code Viewer")}
+                      </button>
+                    ))}
                   </div>
 
                   {activeTab === "report" && (
@@ -577,6 +652,40 @@ function App() {
                           </ul>
                         </>
                       )}
+
+                      {/* Implicated files — clickable to open Code Viewer */}
+                      {(() => {
+                        const paths = m.agentOutputs?.logs?.integration_status?.paths_extracted || [];
+                        if (!paths.length) return null;
+                        return (
+                          <>
+                            <div className="result__label result__label--success" style={{ marginTop: 14 }}>
+                              📄 Implicated Files — click to view source
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" }}>
+                              {paths.map((p, pi) => (
+                                <button
+                                  key={pi}
+                                  type="button"
+                                  onClick={() => fetchFileCode(p)}
+                                  style={{
+                                    background: "rgba(111,251,224,0.08)",
+                                    border: "1px solid rgba(111,251,224,0.3)",
+                                    borderRadius: "4px",
+                                    color: "#6ffbe0",
+                                    cursor: "pointer",
+                                    fontSize: "11px",
+                                    fontFamily: "JetBrains Mono, monospace",
+                                    padding: "4px 10px",
+                                  }}
+                                >
+                                  {p}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </>
                   )}
 
@@ -599,6 +708,35 @@ function App() {
                               <li key={ci}>{c}</li>
                             ))}
                           </ul>
+                        </div>
+                      )}
+
+                      {m.verification?.code_verification && (
+                        <div style={{
+                          background: "rgba(111, 251, 224, 0.04)",
+                          border: "1px solid rgba(111, 251, 224, 0.3)",
+                          borderRadius: "6px",
+                          padding: "10px",
+                        }}>
+                          <div className="result__label result__label--success" style={{ marginBottom: "4px" }}>
+                            Repository Source Code Verified
+                          </div>
+                          <div style={{ fontSize: "11px", color: "#6ffbe0", fontFamily: "JetBrains Mono" }}>
+                            {m.verification.code_verification.file} (Line {m.verification.code_verification.line}, in {m.verification.code_verification.function})
+                          </div>
+                          <pre style={{
+                            margin: "8px 0 0 0",
+                            background: "rgba(0, 0, 0, 0.5)",
+                            padding: "8px 10px",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontFamily: "JetBrains Mono",
+                            color: "#eef1f8",
+                            overflowX: "auto",
+                            whiteSpace: "pre",
+                          }}>
+                            {m.verification.code_verification.context_code}
+                          </pre>
                         </div>
                       )}
 
@@ -675,6 +813,57 @@ function App() {
                           )}
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* ── Code Viewer Tab ── */}
+                  {activeTab === "code" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      {codeLoading && (
+                        <div style={{ color: "#6ffbe0", fontSize: "13px", display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span className="composer__spinner" /> Fetching file from GitHub...
+                        </div>
+                      )}
+                      {codeError && (
+                        <div style={{ color: "#ff7a90", fontSize: "13px", padding: "8px", borderRadius: "6px", background: "rgba(255,122,144,0.08)", border: "1px solid rgba(255,122,144,0.3)" }}>
+                          {codeError}
+                        </div>
+                      )}
+                      {!codeLoading && !codeFile && !codeError && (
+                        <div style={{ color: "#8b93ab", fontSize: "13px" }}>
+                          Click a file from the <strong style={{ color: "#eef1f8" }}>Implicated Files</strong> list in the Root Cause tab to view its source code.
+                        </div>
+                      )}
+                      {codeFile && (
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                            <div style={{ fontSize: "12px", color: "#6ffbe0", fontFamily: "JetBrains Mono, monospace" }}>
+                              📄 {codeFile.path}
+                              {codeFile.truncated && <span style={{ color: "#f5a623", marginLeft: "8px" }}>(truncated to 50 KB)</span>}
+                            </div>
+                            <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "3px", background: "rgba(155,140,255,0.15)", color: "#9b8cff" }}>
+                              {codeFile.language}
+                            </span>
+                          </div>
+                          <pre style={{
+                            margin: 0,
+                            background: "rgba(0,0,0,0.55)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                            borderRadius: "6px",
+                            padding: "12px 14px",
+                            fontSize: "11.5px",
+                            fontFamily: "JetBrains Mono, Fira Code, monospace",
+                            color: "#eef1f8",
+                            overflowX: "auto",
+                            whiteSpace: "pre",
+                            maxHeight: "480px",
+                            overflowY: "auto",
+                            lineHeight: "1.6",
+                          }}>
+                            {codeFile.content}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  # ============================================================================
+  # 1. FastAPI Multi-Agent Orchestrator Backend
+  # ============================================================================
+  backend:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: copilot-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./orchestrator/.env
+    environment:
+      - PORT=8000
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:80
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - copilot-net
+
+  # ============================================================================
+  # 2. React Production Frontend (Served via Nginx)
+  # ============================================================================
+  frontend:
+    build:
+      context: ./orchestrator/frontend
+      dockerfile: Dockerfile
+    container_name: copilot-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - copilot-net
+
+networks:
+  copilot-net:
+    driver: bridge

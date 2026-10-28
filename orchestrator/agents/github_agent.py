@@ -56,6 +56,70 @@ def fetch_package_json(repo_name: str, token: Optional[str] = None) -> Optional[
     return None
 
 
+def inspect_repository(repo_name: str, token: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Scans repository upon connection/selection.
+    Inspects root files, detected languages, manifests, scripts, and recent commits.
+    """
+    token = token or os.getenv("GITHUB_TOKEN")
+    result: Dict[str, Any] = {
+        "repo": repo_name,
+        "root_files": [],
+        "manifests_detected": [],
+        "scripts": {},
+        "language": "Unknown",
+        "recent_commits": [],
+        "dockerfile_found": False,
+        "workflows_found": [],
+    }
+
+    try:
+        repo = _get_repo(repo_name, token)
+        result["language"] = repo.language or "Unknown"
+
+        # List root contents
+        contents = repo.get_contents("")
+        for item in contents[:25]:
+            result["root_files"].append(item.name)
+            name_lower = item.name.lower()
+            if name_lower in ["package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod"]:
+                result["manifests_detected"].append(item.name)
+            if "dockerfile" in name_lower:
+                result["dockerfile_found"] = True
+                result["manifests_detected"].append(item.name)
+
+        # Check package.json scripts
+        pkg_info = fetch_package_json(repo_name, token=token)
+        if pkg_info:
+            result["scripts"] = pkg_info.get("scripts", {})
+
+        # Check workflows
+        try:
+            wf_contents = repo.get_contents(".github/workflows")
+            for wf in wf_contents:
+                if wf.name.endswith((".yml", ".yaml")):
+                    result["workflows_found"].append(wf.name)
+        except Exception:
+            pass
+
+        # Fetch recent commits
+        try:
+            commits = repo.get_commits()[:5]
+            for c in commits:
+                result["recent_commits"].append({
+                    "sha": c.sha[:7],
+                    "message": c.commit.message[:120],
+                    "author": c.commit.author.name if c.commit.author else "Unknown",
+                    "date": str(c.commit.author.date) if c.commit.author else "",
+                })
+        except Exception:
+            pass
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
 def github_agent_targeted(repo_name: str, file_paths: list, commits_per_file: int = 5, token: Optional[str] = None) -> dict:
     repo = _get_repo(repo_name, token)
     result = {"repo": repo_name, "files": []}

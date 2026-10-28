@@ -270,6 +270,84 @@ async def list_user_repos(username: str):
     }
 
 
+@app.get("/github/repo/inspect")
+async def inspect_repo(repo_name: str, token: Optional[str] = None):
+    """
+    Scans and summarizes the connected repository's code, structure,
+    manifests, scripts, and recent commits upon repository selection.
+    """
+    repo_name = repo_name.strip()
+    if not REPO_PATTERN.match(repo_name):
+        raise HTTPException(status_code=400, detail="Invalid repo_name format.")
+
+    from agents.github_agent import inspect_repository
+    return inspect_repository(repo_name, token=token)
+
+
+FILE_PATH_PATTERN = re.compile(r"^[\w./\-][\w./\- ]*$")
+MAX_FILE_SIZE_CHARS = 50_000   # 50 KB — enough for source, not a full dump
+
+
+@app.get("/github/repo/code")
+async def fetch_file_code(repo_name: str, file_path: str, token: Optional[str] = None):
+    """
+    Fetches the raw content of a single file from the selected repository.
+    Used by the frontend Code Viewer panel to display actual source code
+    alongside the multi-agent investigation report.
+
+    Returns:
+      - repo:      the repo name
+      - file_path: the requested path
+      - content:   raw file text (truncated to 50 KB if very large)
+      - truncated: bool — True when the response was cut
+      - language:  language hint inferred from the file extension
+    """
+    repo_name = repo_name.strip()
+    file_path = file_path.strip().lstrip("/")
+
+    if not REPO_PATTERN.match(repo_name):
+        raise HTTPException(status_code=400, detail="Invalid repo_name format.")
+    if not FILE_PATH_PATTERN.match(file_path):
+        raise HTTPException(status_code=400, detail="Invalid file_path format.")
+
+    # Language hint map for frontend syntax highlighting
+    EXT_LANG = {
+        "py": "python", "js": "javascript", "ts": "typescript",
+        "jsx": "jsx", "tsx": "tsx", "java": "java", "go": "go",
+        "rb": "ruby", "rs": "rust", "sh": "bash", "yml": "yaml",
+        "yaml": "yaml", "json": "json", "toml": "toml",
+        "dockerfile": "dockerfile", "md": "markdown",
+    }
+    ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+    # special case: file named "Dockerfile"
+    if file_path.lower().endswith("dockerfile"):
+        ext = "dockerfile"
+    language = EXT_LANG.get(ext, "plaintext")
+
+    from agents.github_agent import _get_repo
+    from github import GithubException
+
+    try:
+        repo = _get_repo(repo_name, token=token)
+        content_file = repo.get_contents(file_path)
+        raw = content_file.decoded_content.decode("utf-8", errors="replace")
+        truncated = len(raw) > MAX_FILE_SIZE_CHARS
+        return {
+            "repo": repo_name,
+            "file_path": file_path,
+            "content": raw[:MAX_FILE_SIZE_CHARS],
+            "truncated": truncated,
+            "language": language,
+            "size_bytes": content_file.size,
+        }
+    except GithubException as e:
+        if e.status == 404:
+            raise HTTPException(status_code=404, detail=f"File '{file_path}' not found in '{repo_name}'.")
+        raise HTTPException(status_code=502, detail=f"GitHub API error {e.status}: {e.data}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch file: {e}")
+
+
 @app.get("/health")
 def health_check():
     mcp_client = GitHubMCPClient()

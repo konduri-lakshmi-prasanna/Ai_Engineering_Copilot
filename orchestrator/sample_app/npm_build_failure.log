@@ -1,0 +1,19 @@
+2026-10-21T11:00:00Z INFO  [CI] Running pipeline: deploy-production
+2026-10-21T11:00:01Z INFO  [CI] Step: Checkout code (success)
+2026-10-21T11:00:10Z INFO  [CI] Step: Install dependencies — npm ci
+2026-10-21T11:00:55Z INFO  [CI] Dependencies installed (127 packages)
+2026-10-21T11:00:56Z INFO  [CI] Step: Run tests — npm test -- --watchAll=false
+2026-10-21T11:01:35Z INFO  [CI] All 42 tests passed
+2026-10-21T11:01:36Z INFO  [CI] Step: Build production bundle — npm run build
+2026-10-21T11:01:37Z INFO  [CI] Creating an optimized production build...
+2026-10-21T11:02:10Z ERROR [CI] Failed to compile.
+2026-10-21T11:02:10Z ERROR [CI] TypeScript error in src/components/Dashboard.tsx:
+2026-10-21T11:02:10Z ERROR [CI]   src/components/Dashboard.tsx(142,23): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+2026-10-21T11:02:10Z ERROR [CI]   src/components/Dashboard.tsx(156,15): error TS2532: Object is possibly 'undefined'.
+2026-10-21T11:02:10Z ERROR [CI] npm ERR! code ELIFECYCLE
+2026-10-21T11:02:10Z ERROR [CI] npm ERR! errno 1
+2026-10-21T11:02:10Z ERROR [CI] npm ERR! frontend@1.2.0 build: `react-scripts build`
+2026-10-21T11:02:10Z ERROR [CI] npm ERR! Exit status 1
+2026-10-21T11:02:11Z ERROR [CI] Process completed with exit code 1
+2026-10-21T11:02:11Z ERROR [CI] Step: Build production bundle FAILED
+2026-10-21T11:02:11Z INFO  [CI] Pipeline deploy-production FAILED — aborting deployment

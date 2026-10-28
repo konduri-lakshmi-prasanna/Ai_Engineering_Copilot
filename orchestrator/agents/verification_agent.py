@@ -70,7 +70,48 @@ def verify_investigation(
     if is_env_error:
         confirmed_facts.append("Verified: runtime configuration/environment variable is undefined during initialization.")
 
-    # 4. Check for contradictory claims between agents
+    # 4. Code & AST-level Line Verification against Repo Files
+    code_verification = None
+    stack_trace_match = re.search(r'File "([^"]+)", line (\d+)(?:, in (\w+))?', log_text)
+    if stack_trace_match:
+        file_path = stack_trace_match.group(1).replace("\\", "/").lstrip("./")
+        line_num = int(stack_trace_match.group(2))
+        func_name = stack_trace_match.group(3) or "module"
+
+        # Search for this file in github evidence
+        matched_file_ev = next(
+            (ev for ev in github_output.get("supporting_evidence", []) if file_path in ev.get("reference", "")),
+            None
+        )
+
+        if matched_file_ev:
+            content = matched_file_ev.get("snippet", "")
+            lines = content.splitlines()
+            start = max(0, line_num - 3)
+            end = min(len(lines), line_num + 3)
+            context_lines = []
+            for idx in range(start, end):
+                prefix = "-> " if idx + 1 == line_num else "   "
+                context_lines.append(f"{prefix}{idx+1}: {lines[idx] if idx < len(lines) else ''}")
+
+            code_context_str = "\n".join(context_lines)
+            confirmed_facts.append(
+                f"Code Verified: Repo file '{file_path}' contains the failing line {line_num} executed in the stack trace."
+            )
+
+            code_verification = {
+                "file": file_path,
+                "line": line_num,
+                "function": func_name,
+                "context_code": code_context_str,
+                "verified_in_repo": True,
+            }
+        else:
+            unsupported_assumptions.append(
+                f"File '{file_path}' from stack trace was not found or verified in the repository tree."
+            )
+
+    # 5. Check for contradictory claims between agents
     infra_findings = agent_outputs.get("infra", {}).get("findings", [])
     infra_oom = any("OOM" in f.get("category", "") for f in infra_findings)
     code_syntax_err = any("SyntaxError" in f.get("category", "") for f in logs_findings)
@@ -104,4 +145,5 @@ def verify_investigation(
         unsupported_assumptions=unsupported_assumptions,
         validation_performed=validation_performed,
         fix_validation_result=fix_validation_result,
+        code_verification=code_verification,
     )
