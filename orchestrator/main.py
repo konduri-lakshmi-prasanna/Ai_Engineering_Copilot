@@ -348,6 +348,202 @@ async def fetch_file_code(repo_name: str, file_path: str, token: Optional[str] =
         raise HTTPException(status_code=500, detail=f"Failed to fetch file: {e}")
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 12 — Code Search & Diff Inspection endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+from agents.code_search import search_code_in_repo
+from agents.diff_inspector import inspect_diff, inspect_commit_diff
+
+# Validation: only allow sane regex/query lengths
+MAX_QUERY_LEN = 200
+SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+@app.get("/github/repo/search")
+def code_search(
+    repo_name: str,
+    query: str,
+    use_regex: bool = False,
+    extensions: str = "",
+    max_results: int = 30,
+    token: Optional[str] = None,
+):
+    """
+    Searches source files in *repo_name* for *query* (plain text or regex).
+
+    Query params
+    ────────────
+    repo_name   : owner/repo
+    query       : text or regex pattern to search for
+    use_regex   : treat query as a regular expression (default: false)
+    extensions  : comma-separated file extensions to search, e.g. ``.py,.js``
+                  (default: all common source extensions)
+    max_results : cap on the number of matches returned (1-100, default 30)
+    token       : optional GitHub OAuth token
+    """
+    repo_name = repo_name.strip()
+    if not REPO_PATTERN.match(repo_name):
+        raise HTTPException(status_code=400, detail="Invalid repo_name format (expected owner/repo).")
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty.")
+    if len(query) > MAX_QUERY_LEN:
+        raise HTTPException(status_code=400, detail=f"query exceeds maximum length of {MAX_QUERY_LEN} characters.")
+    max_results = max(1, min(max_results, 100))
+
+    ext_tuple = None
+    if extensions.strip():
+        raw_exts = [e.strip() for e in extensions.split(",") if e.strip()]
+        # Normalise: ensure leading dot
+        ext_tuple = tuple(e if e.startswith(".") else f".{e}" for e in raw_exts)
+
+    result = search_code_in_repo(
+        repo_name,
+        query,
+        token=token,
+        use_regex=use_regex,
+        max_results=max_results,
+        **({"file_extensions": ext_tuple} if ext_tuple else {}),
+    )
+
+    if result.error:
+        raise HTTPException(status_code=502, detail=result.error)
+
+    # Serialise dataclasses to plain dicts for JSON response
+    return {
+        "repo": result.repo,
+        "query": result.query,
+        "use_regex": result.use_regex,
+        "files_scanned": result.files_scanned,
+        "total_matches": result.total_matches,
+        "truncated": result.truncated,
+        "matches": [
+            {
+                "file_path": m.file_path,
+                "line_number": m.line_number,
+                "line_content": m.line_content,
+                "context_before": m.context_before,
+                "context_after": m.context_after,
+            }
+            for m in result.matches
+        ],
+    }
+
+
+@app.get("/github/repo/diff")
+def git_diff(
+    repo_name: str,
+    base: str,
+    head: str,
+    path_filter: str = "",
+    max_files: int = 20,
+    token: Optional[str] = None,
+):
+    """
+    Returns the unified diff between *base* and *head* refs.
+
+    Query params
+    ────────────
+    repo_name   : owner/repo
+    base        : base commit SHA, branch, or tag
+    head        : head commit SHA, branch, or tag
+    path_filter : optional filename substring filter
+    max_files   : cap on files returned (1-50, default 20)
+    token       : optional GitHub OAuth token
+    """
+    repo_name = repo_name.strip()
+    if not REPO_PATTERN.match(repo_name):
+        raise HTTPException(status_code=400, detail="Invalid repo_name format (expected owner/repo).")
+    if not base.strip() or not head.strip():
+        raise HTTPException(status_code=400, detail="Both 'base' and 'head' are required.")
+    max_files = max(1, min(max_files, 50))
+
+    result = inspect_diff(
+        repo_name,
+        base.strip(),
+        head.strip(),
+        token=token,
+        path_filter=path_filter.strip() or None,
+        max_files=max_files,
+    )
+
+    if result.error:
+        raise HTTPException(status_code=502, detail=result.error)
+
+    return {
+        "repo": result.repo,
+        "base": result.base,
+        "head": result.head,
+        "total_files_changed": result.total_files_changed,
+        "total_additions": result.total_additions,
+        "total_deletions": result.total_deletions,
+        "truncated": result.truncated,
+        "files": [
+            {
+                "filename": f.filename,
+                "status": f.status,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "patch": f.patch,
+                "previous_filename": f.previous_filename,
+            }
+            for f in result.files
+        ],
+    }
+
+
+@app.get("/github/repo/commit-diff")
+def commit_diff(
+    repo_name: str,
+    sha: str,
+    max_files: int = 20,
+    token: Optional[str] = None,
+):
+    """
+    Returns the diff introduced by a single commit (commit vs its first parent).
+
+    Query params
+    ────────────
+    repo_name : owner/repo
+    sha       : commit SHA (7–40 hex characters)
+    max_files : cap on files returned (1-50, default 20)
+    token     : optional GitHub OAuth token
+    """
+    repo_name = repo_name.strip()
+    sha = sha.strip()
+    if not REPO_PATTERN.match(repo_name):
+        raise HTTPException(status_code=400, detail="Invalid repo_name format (expected owner/repo).")
+    if not SHA_PATTERN.match(sha):
+        raise HTTPException(status_code=400, detail="sha must be a 7–40 character hex string.")
+    max_files = max(1, min(max_files, 50))
+
+    result = inspect_commit_diff(repo_name, sha, token=token, max_files=max_files)
+
+    if result.error:
+        raise HTTPException(status_code=502, detail=result.error)
+
+    return {
+        "repo": result.repo,
+        "sha": result.head,
+        "parent_sha": result.base,
+        "total_additions": result.total_additions,
+        "total_deletions": result.total_deletions,
+        "truncated": result.truncated,
+        "files": [
+            {
+                "filename": f.filename,
+                "status": f.status,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "patch": f.patch,
+                "previous_filename": f.previous_filename,
+            }
+            for f in result.files
+        ],
+    }
+
+
 @app.get("/health")
 def health_check():
     mcp_client = GitHubMCPClient()
